@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#05070f">
+<title>Tokyo Drift 3D — Neon Night (M1)</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { width:100%; height:100%; overflow:hidden; background:#05070f; touch-action:none;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:#fff; user-select:none; -webkit-user-select:none; }
+  #game { position:fixed; inset:0; }
+  #game canvas { display:block; width:100%; height:100%; }
+  .hud { position:fixed; z-index:10; pointer-events:none; text-shadow:0 1px 6px rgba(0,0,0,.8); }
+  #topbar { top:calc(10px + env(safe-area-inset-top)); left:0; right:0; display:flex;
+    justify-content:center; gap:26px; font-size:15px; font-weight:600; letter-spacing:.06em; }
+  #topbar .lbl { display:block; font-size:10px; font-weight:400; opacity:.65; letter-spacing:.18em; text-align:center;}
+  #speedo { bottom:calc(118px + env(safe-area-inset-bottom)); left:0; right:0; text-align:center; }
+  #speedo .v { font-size:56px; font-weight:800; line-height:1; }
+  #speedo .u { font-size:13px; opacity:.7; letter-spacing:.2em; }
+  .pad { position:fixed; z-index:20; bottom:calc(18px + env(safe-area-inset-bottom)); display:flex; gap:14px; }
+  #steer { left:18px; }
+  #pedals { right:18px; }
+  .btn { width:74px; height:74px; border-radius:18px; border:1px solid rgba(255,255,255,.22);
+    background:rgba(20,24,36,.62); color:#fff; font-size:26px; font-weight:700;
+    display:flex; align-items:center; justify-content:center; backdrop-filter:blur(4px);
+    touch-action:none; }
+  .btn.on { background:rgba(90,200,120,.55); border-color:#7dff9e; }
+  .btn.brake.on { background:rgba(220,70,70,.6); border-color:#ff8080; }
+  #btn-gas { color:#8dff9e; border-color:rgba(120,255,150,.5); }
+  .btn .t { font-size:11px; font-weight:700; letter-spacing:.08em; }
+  #overlay { position:fixed; inset:0; z-index:50; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:14px; background:rgba(4,6,12,.72); backdrop-filter:blur(3px); }
+  #overlay h1 { font-size:30px; letter-spacing:.12em; font-weight:800;
+    background:linear-gradient(90deg,#ff5fa2,#7df9ff); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  #overlay p { font-size:13px; opacity:.75; }
+  #overlay .tap { margin-top:10px; padding:14px 42px; border-radius:999px; font-size:17px; font-weight:800;
+    letter-spacing:.1em; color:#04120a; background:#7dff9e; border:none; }
+  #err { position:fixed; z-index:99; left:8px; bottom:8px; max-width:90vw; font-size:10px; color:#ff8080;
+    background:rgba(0,0,0,.7); padding:6px 8px; border-radius:6px; display:none; white-space:pre-wrap; }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "./vendor/three.module.js",
+    "rapier": "./vendor/rapier.es.js"
+} }
+</script>
+</head>
+<body>
+<div id="game"></div>
+
+<div class="hud" id="topbar">
+  <div><span class="lbl">TIME</span><span id="hud-time">00:00</span></div>
+  <div><span class="lbl">DIST</span><span id="hud-dist">0.00 km</span></div>
+</div>
+<div class="hud" id="speedo"><div class="v" id="hud-speed">0</div><div class="u">KM/H</div></div>
+
+<div class="pad" id="steer">
+  <div class="btn" id="btn-left">&#9664;</div>
+  <div class="btn" id="btn-right">&#9654;</div>
+</div>
+<div class="pad" id="pedals">
+  <div class="btn brake" id="btn-brake"><span class="t">BRAKE</span></div>
+  <div class="btn" id="btn-gas"><span class="t">GAS</span></div>
+</div>
+
+<div id="overlay">
+  <h1>TOKYO DRIFT 3D</h1>
+  <p>NEON NIGHT &mdash; Milestone 1</p>
+  <p>Steer: &#9664; &#9654; / A D &nbsp;&bull;&nbsp; Gas: GAS / W &nbsp;&bull;&nbsp; Brake: BRAKE / S</p>
+  <button class="tap" id="btn-start">TAP TO START</button>
+</div>
+<div id="err"></div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
