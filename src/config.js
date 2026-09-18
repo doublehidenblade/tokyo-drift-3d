@@ -12,13 +12,34 @@ export const CFG = {
   wheelRadius: 0.42,
   arcadeAccel: 22,        // m/s^2 auto-acceleration toward cap
   nitroAccel: 40,         // m/s^2 while nitro is burning
-  steerLatAccel: 16,      // lateral accel for heading rate (m/s^2)
-  maxHeading: 0.6,        // clamp on heading offset from tangent (rad)
+  // M6 heading-based steering: absolute world-yaw rate, falls with speed
+  // (no high-speed donuts, generous low-speed authority for hairpins).
+  steerYawLow: 1.4,       // yaw rate (rad/s) near standstill
+  steerYawHigh: 0.42,     // yaw rate (rad/s) at maxSpeed
   maxSpeed: 60,           // m/s (~216 km/h)
   nitroMaxSpeed: 75,      // m/s (~270 km/h)
   nitroBurnRate: 0.5,     // meter fraction per second while burning (full burn ~2 s)
   nitroPickupFill: 0.25,  // meter fill per nitro bottle pickup
   maxSteer: 0.55,         // visual front-wheel steer (rad)
+
+  // Guard-rail spec (M6): the world agent builds rail GEOMETRY + Rapier
+  // colliders along the track at these exact offsets; physics.js bounces
+  // the car off the logical rail plane (|lat| = maxLat) every step, so the
+  // car can never tunnel through no matter the speed.
+  railLat: 12.75,         // rail centerline lateral offset (m)
+  railThick: 0.25,        // rail collider half-thickness (m)
+  railHeight: 1.1,        // rail collider height above the road (m)
+  railSegLen: 12,         // collider segment length along s (m)
+  maxLat: 11.1,           // car-center lateral clamp = railLat - railThick - chassisHalf.x
+
+  // M6 free-driving containment failsafe (car-side): leave the rectangle
+  // or drop below voidY and the car respawns on the track.
+  worldBounds: { x: 1700, z: 1700 }, // half-extents (m); track spans ~[-350, 1450]
+  voidY: -30,             // road height below this = void -> respawn
+  respawnSpeed: 20,       // m/s after a respawn (moderate)
+  ghostTime: 1.0,         // s of post-respawn invulnerability (no bump/scrub)
+
+  hearts: 5,              // lives/HP concept (preserved; not consumed by any system yet)
 
   laps: 3,                // race length
 

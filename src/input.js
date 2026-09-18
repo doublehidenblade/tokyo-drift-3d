@@ -9,7 +9,11 @@
 // mapping — the M3 bug was a wrong hardcoded convention ("lat points to
 // the driver's right"; it actually points left), which the old world-space
 // harness check could not catch.
-export const input = { left: false, right: false, nitroPulse: false, latDirSign: 1 };
+//
+// M6: autopilot is a one-shot flag owned by autopilot.js — it sets it on
+// every update() and physics.step() consumes + clears it, applying the
+// attract-mode tangent bias. Player input never sets it.
+export const input = { left: false, right: false, nitroPulse: false, latDirSign: 1, autopilot: false };
 
 export function setInput(s) {
   for (const k of ['left', 'right']) {

@@ -105,6 +105,9 @@
   #overlay .tap:active { transform:translate(2px,2px);
     box-shadow:0 0 20px rgba(53,242,255,.35), inset 0 0 14px rgba(53,242,255,.12), 2px 2px 0 rgba(255,95,162,.55); }
   @keyframes tapPulse { 0%,100% { opacity:1; } 50% { opacity:.6; } }
+  #overlay .tap.secondary { font-size:14px; padding:12px 36px; margin-top:2px;
+    border-color:#ff5fa2; color:#ffc4dd;
+    box-shadow:0 0 20px rgba(255,95,162,.35), inset 0 0 14px rgba(255,95,162,.12), 4px 4px 0 rgba(53,242,255,.45); }
   #menu-foot { position:relative; z-index:2; margin-top:14px; font-size:9px; letter-spacing:.24em;
     text-indent:.24em; opacity:.45; }
   #err { position:fixed; z-index:99; left:8px; bottom:8px; max-width:90vw; font-size:10px; color:#ff8080;
@@ -147,9 +150,12 @@
   Cross into oncoming lanes to dodge traffic.<br>
   Keyboard: &#9664; &#9654; / A D to steer &middot; Space / Shift nitro &middot; P pause.</p>
   <button class="tap" id="btn-start">TAP TO START</button>
+  <button class="tap secondary" id="btn-inspect">WORLD INSPECTOR</button>
   <div id="menu-foot">CSS-ONLY RETRO ART &mdash; NO DESIGNER ASSETS</div>
 </div>
 <div id="err"></div>
+<div id="v2badge" style="display:none;position:fixed;z-index:40;top:calc(8px + env(safe-area-inset-top));left:10px;padding:4px 10px;border-radius:6px;background:rgba(20,8,40,.72);border:1px solid #b46bff;color:#e6c8ff;font-size:10px;letter-spacing:.12em;font-weight:700;pointer-events:none;">V2 LAYOUT DEMO &mdash; massing + road truth, not final art</div>
+<script>if ((new URLSearchParams(location.search).get('world') || 'v2') !== 'classic') { document.getElementById('v2badge').style.display = 'block'; }</script>
 
 <script type="module" src="./src/main.js"></script>
 </body>

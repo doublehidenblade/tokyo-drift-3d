@@ -1,0 +1,202 @@
+[
+ {
+  "pack": "cars",
+  "file": "hatchback-sports.glb"
+ },
+ {
+  "pack": "cars",
+  "file": "police.glb"
+ },
+ {
+  "pack": "cars",
+  "file": "race.glb"
+ },
+ {
+  "pack": "cars",
+  "file": "sedan-sports.glb"
+ },
+ {
+  "pack": "cars",
+  "file": "sedan.glb"
+ },
+ {
+  "pack": "cars",
+  "file": "suv.glb"
+ },
+ {
+  "pack": "cars",
+  "file": "taxi.glb"
+ },
+ {
+  "pack": "cars",
+  "file": "van.glb"
+ },
+ {
+  "pack": "commercial",
+  "file": "building-a.glb"
+ },
+ {
+  "pack": "commercial",
+  "file": "building-b.glb"
+ },
+ {
+  "pack": "commercial",
+  "file": "building-c.glb"
+ },
+ {
+  "pack": "commercial",
+  "file": "building-d.glb"
+ },
+ {
+  "pack": "commercial",
+  "file": "building-e.glb"
+ },
+ {
+  "pack": "commercial",
+  "file": "building-f.glb"
+ },
+ {
+  "pack": "commercial",
+  "file": "building-g.glb"
+ },
+ {
+  "pack": "commercial",
+  "file": "building-h.glb"
+ },
+ {
+  "pack": "commercial",
+  "file": "building-skyscraper-a.glb"
+ },
+ {
+  "pack": "commercial",
+  "file": "building-skyscraper-b.glb"
+ },
+ {
+  "pack": "industrial",
+  "file": "building-a.glb"
+ },
+ {
+  "pack": "industrial",
+  "file": "building-f.glb"
+ },
+ {
+  "pack": "industrial",
+  "file": "building-k.glb"
+ },
+ {
+  "pack": "industrial",
+  "file": "chimney-large.glb"
+ },
+ {
+  "pack": "industrial",
+  "file": "detail-tank-large.glb"
+ },
+ {
+  "pack": "industrial",
+  "file": "shipping-container-a.glb"
+ },
+ {
+  "pack": "industrial",
+  "file": "water-tower.glb"
+ },
+ {
+  "pack": "industrial",
+  "file": "windmill.glb"
+ },
+ {
+  "pack": "racing",
+  "file": "barrierRed.glb"
+ },
+ {
+  "pack": "racing",
+  "file": "barrierWall.glb"
+ },
+ {
+  "pack": "racing",
+  "file": "billboard.glb"
+ },
+ {
+  "pack": "racing",
+  "file": "flagCheckers.glb"
+ },
+ {
+  "pack": "racing",
+  "file": "grandStand.glb"
+ },
+ {
+  "pack": "racing",
+  "file": "lightPostLarge.glb"
+ },
+ {
+  "pack": "racing",
+  "file": "overhead.glb"
+ },
+ {
+  "pack": "racing",
+  "file": "pylon.glb"
+ },
+ {
+  "pack": "roads",
+  "file": "construction-cone.glb"
+ },
+ {
+  "pack": "roads",
+  "file": "light-curved.glb"
+ },
+ {
+  "pack": "roads",
+  "file": "road-curve.glb"
+ },
+ {
+  "pack": "roads",
+  "file": "road-intersection.glb"
+ },
+ {
+  "pack": "roads",
+  "file": "road-roundabout.glb"
+ },
+ {
+  "pack": "roads",
+  "file": "road-sign-stop.glb"
+ },
+ {
+  "pack": "roads",
+  "file": "road-straight.glb"
+ },
+ {
+  "pack": "roads",
+  "file": "traffic-light.glb"
+ },
+ {
+  "pack": "suburban",
+  "file": "building-type-a.glb"
+ },
+ {
+  "pack": "suburban",
+  "file": "building-type-c.glb"
+ },
+ {
+  "pack": "suburban",
+  "file": "building-type-e.glb"
+ },
+ {
+  "pack": "suburban",
+  "file": "building-type-g.glb"
+ },
+ {
+  "pack": "suburban",
+  "file": "building-type-i.glb"
+ },
+ {
+  "pack": "suburban",
+  "file": "building-type-k.glb"
+ },
+ {
+  "pack": "suburban",
+  "file": "building-type-m.glb"
+ },
+ {
+  "pack": "suburban",
+  "file": "building-type-o.glb"
+ }
+]

@@ -3,13 +3,14 @@
 import * as THREE from 'three';
 import RAPIER from 'rapier';
 import { CFG } from './config.js';
-import { Track } from './track.js';
 import { createPhysics } from './physics.js';
-import { buildCity } from './city.js';
-import { buildCarMesh, WHEEL_SPOTS } from './car.js';
+// NOTE: Track / buildCity are loaded dynamically in boot() — ?world=classic
+// loads the M6 track/city, anything else (default) loads the v2 plan world.
+import { buildCarMesh, WHEEL_SPOTS, WHEEL_RADIUS, preloadCarModels } from './car.js';
 import { Sparks } from './sparks.js';
 import { input, bindInput, setInput, pulseNitro } from './input.js';
 import { bindHud, updateHud, bindPauseButton, setPausedUI, setPauseVisible } from './hud.js';
+import { createInspector } from './inspector.js';
 
 const errors = [];
 function reportError(msg) {
@@ -20,7 +21,7 @@ function reportError(msg) {
 window.addEventListener('error', (e) => reportError('error: ' + (e.message || e.type)));
 window.addEventListener('unhandledrejection', (e) => reportError('reject: ' + (e.reason && e.reason.message || e.reason)));
 
-let track, physics, renderer, scene, camera, playerMesh, rivalMesh, sparks, city;
+let track, physics, renderer, scene, camera, playerMesh, rivalMesh, sparks, city, inspector;
 let state = 'menu';       // menu | playing
 let elapsed = 0;
 let sparkCount = 0;
@@ -49,6 +50,25 @@ function tunnelFactor(s) {
 
 async function boot() {
   await RAPIER.init();
+  // Real car models (Kenney car-kit GLBs): preload before buildCity, which
+  // builds traffic visuals, and before buildCarMesh (player/rival).
+  await preloadCarModels();
+  // World selection: ?world=classic restores the M6 track/city; the
+  // default ('v2') loads the plan-driven v2 world (track_v2/city_v2).
+  const WORLD = new URLSearchParams(location.search).get('world') || 'v2';
+  let Track, buildCity;
+  if (WORLD === 'classic') {
+    ({ Track } = await import('./track.js'));
+    ({ buildCity } = await import('./city.js'));
+  } else {
+    ({ TrackV2: Track } = await import('./track_v2.js'));
+    ({ buildCityV2: buildCity } = await import('./city_v2.js'));
+    // v2 spawn: the plan's start/finish (mid-straight, facing the tangent).
+    // physics.reset()/teleportS read CFG.spawnS, so set it before
+    // createPhysics runs its initial reset().
+    const { PLAN } = await import('./plan_v2.js');
+    CFG.spawnS = PLAN.start_finish.s_m;
+  }
   track = new Track();
   physics = await createPhysics(RAPIER, track);
 
@@ -76,10 +96,31 @@ async function boot() {
   rivalMesh = buildCarMesh(0x1ad1c0);  // teal rival
   scene.add(playerMesh, rivalMesh);
 
+  // M6 world inspector: view-only asset viewer + 2D city plan, from the menu.
+  inspector = createInspector({
+    scene, track, city, renderer,
+    extraAssets: [
+      { name: 'player-racecar', object: playerMesh },
+      { name: 'rival-racecar', object: rivalMesh },
+    ],
+  });
+  document.getElementById('btn-inspect').addEventListener('click', () => {
+    togglePause(true);
+    setPauseVisible(false);
+    document.getElementById('overlay').style.display = 'none';
+    inspector.open('assets');
+  });
+  inspector.onClose = () => {
+    togglePause(false);
+    setPauseVisible(false);
+    document.getElementById('overlay').style.display = 'flex';
+  };
+
   bindInput();
   bindHud();
   bindPauseButton(() => togglePause());
   window.addEventListener('keydown', (e) => {
+    if (inspector && inspector.isOpen() && e.code === 'Escape') { e.preventDefault(); inspector.close(); return; }
     if (e.code === 'KeyP' || e.code === 'Escape') { e.preventDefault(); togglePause(); }
   });
   window.addEventListener('resize', onResize);
@@ -189,7 +230,7 @@ async function boot() {
         lapStartT: +a.lapStartT.toFixed(2), lastLapT: a.lastLapT,
         raceDone: a.raceDone,
         x: +t.x.toFixed(1), y: +t.y.toFixed(1), z: +t.z.toFixed(1),
-        yaw: +(track.frameAt(a.s).yaw + a.heading).toFixed(3),
+        yaw: +a.heading.toFixed(3),
         heading: +a.heading.toFixed(3),
         rivalS: +physics.rivalSt.s.toFixed(1),
         traffic: physics.traffic.map((c) => ({ kind: c.kind, s: +c.s.toFixed(0), lane: c.lane })),
@@ -374,6 +415,7 @@ function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  if (inspector) inspector.onResize();
 }
 
 function resetGame() {
@@ -395,7 +437,9 @@ function syncBodyMesh(mesh, body, isPlayer) {
   mesh.position.set(t.x, t.y - CFG.chassisHalf.y, t.z);
   if (isPlayer) {
     track.frameAt(physics.arcade.s, _f);
-    const yaw = _f.yaw + physics.arcade.heading;
+    // M6: heading is absolute world yaw now (physics owns it); the old code
+    // added the track tangent yaw on top, double-yawing the rendered car.
+    const yaw = physics.arcade.heading;
     mesh.quaternion.set(0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2));
     // Roll the car with the banking for a planted look.
     const rollQ = new THREE.Quaternion().setFromAxisAngle(
@@ -403,14 +447,14 @@ function syncBodyMesh(mesh, body, isPlayer) {
     mesh.quaternion.premultiply(rollQ);
     const ws = mesh.userData.wheels;
     ws.forEach((w, i) => {
-      w.position.set(WHEEL_SPOTS[i][0], CFG.wheelRadius, WHEEL_SPOTS[i][1]);
+      w.position.set(WHEEL_SPOTS[i][0], WHEEL_RADIUS, WHEEL_SPOTS[i][1]);
       w.rotation.y = i < 2 ? physics.arcade.steerVis : 0; // front wheels steer visually
     });
   } else {
     const r = body.rotation();
     mesh.quaternion.set(r.x, r.y, r.z, r.w);
     const ws = mesh.userData.wheels;
-    ws.forEach((w, i) => w.position.set(WHEEL_SPOTS[i][0], CFG.wheelRadius, WHEEL_SPOTS[i][1]));
+    ws.forEach((w, i) => w.position.set(WHEEL_SPOTS[i][0], WHEEL_RADIUS, WHEEL_SPOTS[i][1]));
   }
 }
 
@@ -454,8 +498,8 @@ function carBoxes() {
   const pt = physics.chassis.translation();
   list.push({
     name: 'player',
-    col: { x: pt.x, y: pt.y + info.player.colOff, z: pt.z, hx: 1.4, hy: 0.75, hz: 2.8, yaw: _boxF.yaw + a.heading },
-    mesh: { s: a.s, lat: a.lat, y0: 0, y1: 1.5, hx: 1.4, hz: 2.8, yaw: _boxF.yaw + a.heading },
+    col: { x: pt.x, y: pt.y + info.player.colOff, z: pt.z, hx: 1.4, hy: 0.75, hz: 2.8, yaw: a.heading },
+    mesh: { s: a.s, lat: a.lat, y0: 0, y1: 1.5, hx: 1.4, hz: 2.8, yaw: a.heading },
   });
   for (let i = 0; i < physics.traffic.length; i++) {
     const c = physics.traffic[i];
@@ -605,6 +649,9 @@ function loop() {
   try {
     const dt = Math.min(clock.getDelta(), 0.1);
     trackFps(dt);
+    // M6: when the world inspector is open it owns the frame (renders its
+    // own stage/plan views); the game stays paused underneath.
+    if (inspector && inspector.isOpen()) { inspector.update(dt); return; }
     if (!paused) {
       // Menu attract mode: the autopilot drives the car behind the title
       // (racing=true so it actually moves). Race time only accrues while
@@ -633,6 +680,10 @@ function loop() {
       updateLatDirSign();
       if (colliderDbg) updateColliderDebug();
       city.update(dt, elapsed, physics.bottles);
+      // M6 B4: a traffic car whose visual hasn't finished fading in cannot
+      // collide yet — no ghost-car hits. (Headless harness scenarios never
+      // call this, so their contacts keep working as before.)
+      physics.setTrafficFade(city.trafficFade());
       sparks.update(dt);
       const a = physics.arcade;
       city.setTunnelGlow(tunnelFactor(a.s));

@@ -265,9 +265,12 @@ export function makeAwningTexture(seed) {
 }
 
 // Asphalt with lane markings. Canvas maps 30 m across (u); the road
-// geometry repeats along the lap via UV v = s/24.
-// M3 lane layout — one wide roadway, NO median:
-//   solid edge lines at +/-12 m, dashed lane lines at +/-8, +/-4, center 0.
+// geometry repeats along the lap via UV v = s/24 (256 px = 24 m).
+// M6 lane layout (B7) — one wide roadway, NO median:
+//   solid edge lines at +/-12 m, SOLID center line at 0 (splits the two
+//   traffic directions), and dashed lane lines at +/-8, +/-4 with VARIED
+//   dash/gap lengths. Every dash cycle divides the 24 m tile (6 m cycles)
+//   so the pattern tiles seamlessly along v.
 export function makeRoadTexture() {
   const [c, g] = canvas(256, 256);
   g.fillStyle = '#14161c';
@@ -278,15 +281,30 @@ export function makeRoadTexture() {
     g.fillStyle = rnd() < 0.5 ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.25)';
     g.fillRect((rnd() * 256) | 0, (rnd() * 256) | 0, 2, 2);
   }
-  // canvas covers 30 m: px = (x + 15) / 30 * 256
+  // canvas covers 30 m: px = (x + 15) / 30 * 256 ; 256 px = 24 m along v
   const px = (x) => ((x + 15) / 30) * 256;
+  const M_PER_PX = 24 / 256;
   g.fillStyle = '#e8ecf4';
   // solid edge lines at +/-12
   g.fillRect(px(-12) - 2, 0, 4, 256);
   g.fillRect(px(12) - 2, 0, 4, 256);
-  // dashed lane lines at +/-8, +/-4 and center 0
-  for (const x of [-8, -4, 0, 4, 8]) {
-    for (let y = 0; y < 256; y += 64) g.fillRect(px(x) - 2, y + 8, 4, 32);
+  // SOLID center line at 0 — splits the two traffic directions (B7).
+  // Slightly warm white, a touch wider than the edge lines.
+  g.fillStyle = '#f5eeda';
+  g.fillRect(px(0) - 3, 0, 6, 256);
+  g.fillStyle = '#e8ecf4';
+  // Dashed lane lines at +/-8, +/-4 — varied dash/gap per line (B7).
+  // [lateral, dashM, gapM]; dash+gap = 6 m so the 24 m tile always closes.
+  const DASHES = [
+    [-8, 3.0, 3.0],
+    [-4, 2.0, 4.0],
+    [4, 4.0, 2.0],
+    [8, 1.5, 4.5],
+  ];
+  for (const [x, dashM, gapM] of DASHES) {
+    const dashPx = dashM / M_PER_PX, cycPx = (dashM + gapM) / M_PER_PX;
+    for (let y = 0; y < 256; y += cycPx)
+      g.fillRect(px(x) - 2, y + 2, 4, Math.min(dashPx, 256 - y - 2));
   }
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
@@ -405,9 +423,38 @@ export function makeDirPanelTexture(line1, line2) {
   return t;
 }
 
-// Tunnel interior concrete with panel seams.
-export function makeTunnelTexture() {
+// Weathered concrete for tunnel portal headwalls / retaining walls.
+// Procedural placeholder art.
+export function makeConcreteTexture(seed) {
   const [c, g] = canvas(256, 256);
+  const rnd = mulberry32(seed);
+  g.fillStyle = '#232830';
+  g.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 1400; i++) {
+    g.fillStyle = rnd() < 0.5 ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.22)';
+    g.fillRect((rnd() * 256) | 0, (rnd() * 256) | 0, 3, 3);
+  }
+  // formwork panel seams
+  g.strokeStyle = 'rgba(0,0,0,0.5)'; g.lineWidth = 2;
+  for (let x = 0; x <= 256; x += 64) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, 256); g.stroke(); }
+  for (let y = 0; y <= 256; y += 64) { g.beginPath(); g.moveTo(0, y); g.lineTo(256, y); g.stroke(); }
+  // water staining streaks running down
+  for (let i = 0; i < 26; i++) {
+    const x = rnd() * 256, w = 3 + rnd() * 8, h = 40 + rnd() * 120;
+    const grad = g.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, 'rgba(0,0,0,0.28)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = grad;
+    g.save(); g.translate(x, rnd() * 60); g.fillRect(-w / 2, 0, w, h); g.restore();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
+
+// Tunnel interior concrete with panel seams.
+export function makeTunnelTexture() {  const [c, g] = canvas(256, 256);
   const rnd = mulberry32(4242);
   g.fillStyle = '#151920';
   g.fillRect(0, 0, 256, 256);

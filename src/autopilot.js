@@ -1,8 +1,13 @@
-// Autopilot driver for the M4 self-iteration harness.
+// Autopilot driver for the M4 self-iteration harness + menu attract mode.
 // Gated behind ?autopilot=1 via dynamic import — players never download or
-// parse this module. It drives EXACTLY like a human: it only sets
-// input.left / input.right (screen semantics) and input.nitroPulse, so the
-// screen-space steering path it exercises is the same one players use.
+// parse this module. M6: the player car is heading-driven (zero input =
+// straight), but the autopilot EXPLICITLY track-follows: it pure-pursuits
+// the racing line 110 m ahead in track space (pure pursuit is designed for
+// heading-based vehicles), and it sets input.autopilot on every update so
+// physics applies the attract-mode tangent bias for that step. It drives
+// like a human otherwise: it only sets input.left / input.right (screen
+// semantics) and input.nitroPulse, so the screen-space steering path it
+// exercises is the same one players use.
 //
 // Strategy: pure-pursuit of the road 110 m ahead (in track space), emergency
 // lane-change when traffic threatens the corridor, nitro burn when the
@@ -28,6 +33,9 @@ export function createAutopilot(track, physics, input) {
   const api = {
     update(dt) {
       const a = physics.arcade;
+      // M6: one-shot flag consumed by physics.step — marks this step as
+      // autopilot-driven so the attract-mode tangent bias applies.
+      input.autopilot = true;
       if (a.lap !== lastLap) {
         laps.push(a.lastLapT);
         lastLap = a.lap;

@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kenney model showroom — CC0 packs, visual review only</title>
+<style>
+  :root { --bg:#0b0d10; --card:#14171c; --edge:#232932; --text:#e8ecf1; --muted:#8b94a3; --accent:#58a6ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width:1200px; margin:0 auto; padding:28px 20px 60px; }
+  h1 { font-size:24px; margin:0 0 6px; }
+  p.sub { color:var(--muted); margin:4px 0 20px; font-size:13.5px; }
+  p.sub a { color:var(--accent); }
+  .tabs { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; }
+  .tabs button { background:var(--card); color:var(--text); border:1px solid var(--edge); border-radius:8px; padding:9px 14px; font-size:13.5px; cursor:pointer; }
+  .tabs button.active { background:#1c2b45; border-color:var(--accent); color:#fff; }
+  .tabs button .n { color:var(--muted); font-size:11.5px; margin-left:6px; }
+  .viewer-wrap { position:relative; background:#05070a; border:1px solid var(--edge); border-radius:12px; overflow:hidden; }
+  #viewer { display:block; width:100%; height:62vh; min-height:380px; cursor:grab; touch-action:none; }
+  #viewer:active { cursor:grabbing; }
+  #toyframe { display:none; width:100%; height:62vh; min-height:380px; border:0; }
+  #loading { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:14px; pointer-events:none; }
+  .controls { display:flex; align-items:center; gap:10px; margin-top:14px; flex-wrap:wrap; }
+  .controls button.nav { background:var(--card); color:var(--text); border:1px solid var(--edge); border-radius:8px; padding:9px 16px; font-size:14px; cursor:pointer; }
+  .controls button.nav:hover { border-color:var(--accent); }
+  .controls select { background:var(--card); color:var(--text); border:1px solid var(--edge); border-radius:8px; padding:9px 12px; font-size:13.5px; max-width:340px; }
+  .model-name { font-size:14px; }
+  .model-name .file { color:var(--muted); font-size:12.5px; }
+  .hint { color:var(--muted); font-size:12px; margin-left:auto; }
+  #status { margin-top:10px; font-size:12.5px; color:var(--muted); min-height:18px; }
+  #status .err { color:#f0883e; }
+  .foot { margin-top:26px; color:var(--muted); font-size:12px; }
+  .foot a { color:var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Kenney model showroom</h1>
+  <p class="sub">CC0 packs, visual review only &mdash; drag to orbit, scroll to zoom. Models by <a href="https://kenney.nl/assets" target="_blank" rel="noopener">Kenney</a> (CC0 1.0 Universal). License: <a href="showroom/KENNEY-LICENSE.txt">KENNEY-LICENSE.txt</a>.</p>
+  <div class="tabs" id="tabs"></div>
+  <div class="viewer-wrap">
+    <canvas id="viewer"></canvas>
+    <iframe id="toyframe" title="Toy scene"></iframe>
+    <div id="loading">loading model&hellip;</div>
+  </div>
+  <div class="controls" id="controls">
+    <button class="nav" id="prev">&larr; prev</button>
+    <select id="picker" aria-label="Choose model"></select>
+    <button class="nav" id="next">next &rarr;</button>
+    <span class="model-name" id="modelname"></span>
+    <span class="hint">drag to orbit &middot; scroll to zoom</span>
+  </div>
+  <div id="status"></div>
+  <p class="foot">One viewer, lazy per-model loading. The toy scene is a hand-assembled diorama (separate page: <a href="toy-scene.html">toy-scene.html</a>).</p>
+</main>
+
+<script type="module">
+import * as THREE from './vendor/three.module.js';
+import { GLTFLoader } from './vendor/GLTFLoader.js';
+
+const CATEGORIES = [
+  { id:'commercial', title:'Commercial', models:[
+    ['commercial-building-1','building-a.glb'],['commercial-building-2','building-b.glb'],
+    ['commercial-building-3','building-c.glb'],['commercial-building-4','building-d.glb'],
+    ['commercial-building-5','building-e.glb'],['commercial-building-6','building-f.glb'],
+    ['commercial-building-7','building-g.glb'],['commercial-building-8','building-h.glb'],
+    ['commercial-building-9','building-skyscraper-a.glb'],['commercial-building-10','building-skyscraper-b.glb']]},
+  { id:'suburban', title:'Suburban', models:[
+    ['suburban-building-1','building-type-a.glb'],['suburban-building-2','building-type-c.glb'],
+    ['suburban-building-3','building-type-e.glb'],['suburban-building-4','building-type-g.glb'],
+    ['suburban-building-5','building-type-i.glb'],['suburban-building-6','building-type-k.glb'],
+    ['suburban-building-7','building-type-m.glb'],['suburban-building-8','building-type-o.glb']]},
+  { id:'industrial', title:'Industrial', models:[
+    ['industrial-building-1','building-a.glb'],['industrial-building-2','building-f.glb'],
+    ['industrial-building-3','building-k.glb'],['industrial-water-tower','water-tower.glb'],
+    ['industrial-chimney','chimney-large.glb'],['industrial-tank','detail-tank-large.glb'],
+    ['industrial-container','shipping-container-a.glb'],['industrial-windmill','windmill.glb']]},
+  { id:'roads', title:'Roads', models:[
+    ['road-roundabout','road-roundabout.glb'],['road-curve','road-curve.glb'],
+    ['road-intersection','road-intersection.glb'],['road-traffic-light','traffic-light.glb'],
+    ['road-cone','construction-cone.glb'],['road-sign-stop','road-sign-stop.glb']]},
+  { id:'cars', title:'Cars', models:[
+    ['car-1','sedan.glb'],['car-2','sedan-sports.glb'],['car-3','suv.glb'],['car-4','taxi.glb'],
+    ['car-5','police.glb'],['car-6','van.glb'],['car-7','race.glb'],['car-8','hatchback-sports.glb']]},
+  { id:'racing', title:'Racing props', models:[
+    ['barrier-wall','barrierWall.glb'],['barrier-red','barrierRed.glb'],
+    ['light-post','lightPostLarge.glb'],['flag-checkers','flagCheckers.glb'],
+    ['pylon','pylon.glb'],['overhead-gantry','overhead.glb'],
+    ['billboard','billboard.glb'],['grandstand','grandStand.glb']]},
+  { id:'toy', title:'\u2605 Toy scene', iframe:'toy-scene.html' },
+];
+
+const loader = new GLTFLoader();
+const canvas = document.getElementById('viewer');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.setClearColor(0x05070a, 1);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+
+const scene = new THREE.Scene();
+scene.add(new THREE.HemisphereLight(0xffffff, 0x223044, 1.6));
+const key = new THREE.DirectionalLight(0xffffff, 2.2); key.position.set(4,7,3); scene.add(key);
+const fill = new THREE.DirectionalLight(0x88aaff, 0.6); fill.position.set(-5,3,-4); scene.add(fill);
+const camera = new THREE.PerspectiveCamera(42, 1, 0.01, 300);
+const orbit = { theta:0.8, phi:1.05, radius:10, target:new THREE.Vector3(), auto:true };
+
+// --- minimal orbit control (inline) ---
+let dragging=false, px=0, py=0;
+canvas.addEventListener('pointerdown', e=>{ dragging=true; px=e.clientX; py=e.clientY; orbit.auto=false; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', e=>{
+  if(!dragging) return;
+  orbit.theta -= (e.clientX-px)*0.008;
+  orbit.phi = THREE.MathUtils.clamp(orbit.phi-(e.clientY-py)*0.008, 0.15, Math.PI-0.15);
+  px=e.clientX; py=e.clientY;
+});
+canvas.addEventListener('pointerup', ()=>{ dragging=false; });
+canvas.addEventListener('pointercancel', ()=>{ dragging=false; });
+canvas.addEventListener('wheel', e=>{
+  e.preventDefault();
+  orbit.radius = THREE.MathUtils.clamp(orbit.radius*(1+Math.sign(e.deltaY)*0.12), 1.2, 120);
+  orbit.auto=false;
+}, { passive:false });
+
+function sizeRenderer(){
+  const r = canvas.getBoundingClientRect();
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
+  renderer.setSize(r.width, r.height, false);
+}
+window.addEventListener('resize', sizeRenderer);
+
+const tabsEl = document.getElementById('tabs');
+const picker = document.getElementById('picker');
+const modelname = document.getElementById('modelname');
+const statusEl = document.getElementById('status');
+const loadingEl = document.getElementById('loading');
+const frame = document.getElementById('toyframe');
+const controlsEl = document.getElementById('controls');
+
+let activeCat = 0, activeIdx = 0, currentGroup = null;
+const errors = [];
+
+function setStatus(msg, isErr){
+  statusEl.innerHTML = isErr ? `<span class="err">${msg}</span>` : msg;
+}
+
+function clearModel(){
+  if (currentGroup){ scene.remove(currentGroup); currentGroup.traverse(o=>{ if(o.geometry) o.geometry.dispose(); }); currentGroup=null; }
+}
+
+function showModel(catIdx, idx){
+  const cat = CATEGORIES[catIdx];
+  if (cat.iframe) return;
+  activeCat = catIdx; activeIdx = ((idx % cat.models.length)+cat.models.length)%cat.models.length;
+  const [name, file] = cat.models[activeIdx];
+  const url = `showroom/models/${cat.id}/${file}`;
+  clearModel();
+  loadingEl.style.display='flex';
+  setStatus(`loading ${name} &hellip;`);
+  loader.load(url, gltf=>{
+    const obj = gltf.scene;
+    const box = new THREE.Box3().setFromObject(obj);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    obj.position.x -= center.x; obj.position.z -= center.z; obj.position.y -= box.min.y;
+    currentGroup = new THREE.Group();
+    currentGroup.add(obj);
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const grid = new THREE.GridHelper(Math.max(maxDim*2.2, 4), 12, 0x3a4352, 0x232a36);
+    grid.position.y = 0.002;
+    currentGroup.add(grid);
+    scene.add(currentGroup);
+    orbit.target.set(0, size.y*0.45, 0);
+    orbit.radius = (maxDim/2)/Math.tan(THREE.MathUtils.degToRad(camera.fov/2))*1.35;
+    orbit.theta = 0.8; orbit.phi = 1.05; orbit.auto = true;
+    loadingEl.style.display='none';
+    picker.value = String(activeIdx);
+    modelname.innerHTML = `${name} <span class="file">&mdash; ${cat.id}/${file}</span>`;
+    setStatus(`loaded ${name} (${(maxDim).toFixed(1)} m bounding size)`);
+    window.__api.state = { cat:cat.id, idx:activeIdx, name, loaded:true, error:null };
+  }, undefined, err=>{
+    loadingEl.style.display='none';
+    const msg = `FAILED to load ${name} (${file}): ${(err&&err.message)||err}`;
+    errors.push(msg); setStatus(msg, true);
+    modelname.innerHTML = `${name} <span class="file">&mdash; failed</span>`;
+    window.__api.state = { cat:cat.id, idx:activeIdx, name, loaded:false, error:msg };
+  });
+}
+
+function selectTab(i){
+  activeCat = i;
+  [...tabsEl.children].forEach((b,j)=>b.classList.toggle('active', j===i));
+  const cat = CATEGORIES[i];
+  if (cat.iframe){
+    canvas.style.display='none'; loadingEl.style.display='none';
+    frame.style.display='block'; frame.src = cat.iframe;
+    controlsEl.style.display='none';
+    modelname.textContent=''; setStatus('toy scene diorama — assembled from the curated Kenney models');
+    window.__api.state = { cat:'toy', loaded:true, error:null };
+  } else {
+    frame.style.display='none'; frame.removeAttribute('src');
+    canvas.style.display='block'; controlsEl.style.display='flex';
+    picker.innerHTML = cat.models.map(([n],k)=>`<option value="${k}">${n}</option>`).join('');
+    sizeRenderer();
+    showModel(i, 0);
+  }
+}
+
+// build tabs
+CATEGORIES.forEach((cat,i)=>{
+  const b = document.createElement('button');
+  b.innerHTML = `${cat.title}${cat.models?`<span class="n">${cat.models.length}</span>`:''}`;
+  b.addEventListener('click', ()=>selectTab(i));
+  tabsEl.appendChild(b);
+});
+document.getElementById('prev').addEventListener('click', ()=>showModel(activeCat, activeIdx-1));
+document.getElementById('next').addEventListener('click', ()=>showModel(activeCat, activeIdx+1));
+picker.addEventListener('change', ()=>showModel(activeCat, Number(picker.value)));
+
+function loop(){
+  requestAnimationFrame(loop);
+  if (canvas.style.display==='none') return;
+  if (orbit.auto) orbit.theta += 0.004;
+  const sp = Math.sin(orbit.phi);
+  camera.position.set(
+    orbit.target.x + orbit.radius*sp*Math.sin(orbit.theta),
+    orbit.target.y + orbit.radius*Math.cos(orbit.phi),
+    orbit.target.z + orbit.radius*sp*Math.cos(orbit.theta));
+  camera.lookAt(orbit.target);
+  renderer.render(scene, camera);
+}
+
+// test hook
+window.__api = {
+  categories: CATEGORIES.map(c=>({id:c.id, title:c.title, count:(c.models||[]).length, iframe:!!c.iframe})),
+  selectTab, showModel, errors,
+  state: { cat:null, idx:0, name:null, loaded:false, error:null },
+};
+
+sizeRenderer();
+selectTab(0);
+loop();
+</script>
+</body>
+</html>

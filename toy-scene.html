@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toy scene — Kenney diorama</title>
+<style>
+  html,body { margin:0; height:100%; background:#060a14; overflow:hidden; font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  #scene { position:fixed; inset:0; width:100%; height:100%; display:block; cursor:grab; touch-action:none; }
+  #scene:active { cursor:grabbing; }
+  #overlay { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; color:#8b94a3; background:#060a14; z-index:5; font-size:15px; transition:opacity .6s; }
+  #overlay.done { opacity:0; pointer-events:none; }
+  #caption { position:fixed; left:14px; bottom:12px; color:#aeb7c6; font-size:12.5px; z-index:4; background:rgba(6,10,20,.55); padding:8px 12px; border-radius:8px; border:1px solid #232932; }
+  #caption b { color:#fff; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="overlay">assembling toy scene&hellip;</div>
+<div id="caption"><b>Night drive diorama</b> &mdash; Kenney CC0 city kits &middot; drag to orbit, scroll to zoom</div>
+
+<script type="module">
+import * as THREE from './vendor/three.module.js';
+import { GLTFLoader } from './vendor/GLTFLoader.js';
+
+const loader = new GLTFLoader();
+const errors = [];
+window.__toyErrors = errors;
+
+const canvas = document.getElementById('scene');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.35;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x060a14);
+scene.fog = new THREE.FogExp2(0x060a14, 0.013);
+
+// --- night lighting ---
+scene.add(new THREE.HemisphereLight(0x33456b, 0x0a0d14, 1.0));
+const moon = new THREE.DirectionalLight(0x9db8ff, 1.1);
+moon.position.set(20, 30, 10);
+scene.add(moon);
+
+// stars
+{
+  const n = 500, pos = new Float32Array(n*3);
+  for (let i=0;i<n;i++){
+    const t = Math.random()*Math.PI*2, p = Math.random()*Math.PI*0.45+0.05, r = 130;
+    pos[i*3] = r*Math.cos(t)*Math.cos(p); pos[i*3+1] = r*Math.sin(p); pos[i*3+2] = r*Math.sin(t)*Math.cos(p);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color:0xcdd8ff, size:0.7, sizeAttenuation:false, fog:false })));
+}
+
+// ground base
+{
+  const g = new THREE.Mesh(
+    new THREE.CircleGeometry(60, 48),
+    new THREE.MeshStandardMaterial({ color:0x141a26, roughness:1 }));
+  g.rotation.x = -Math.PI/2; g.position.y = -0.02; scene.add(g);
+}
+
+const M = (pack, file) => `showroom/models/${pack}/${file}`;
+const jobs = [];
+const lampLights = [];
+
+function place(pack, file, x, z, ry=0, opts={}){
+  jobs.push({ url:M(pack,file), x, z, ry, ...opts });
+}
+
+async function build(){
+  // --- roads: cross avenue on 4 m grid ---
+  place('roads','road-intersection.glb', 0, 0);
+  for (const x of [-8,-4,4,8]) place('roads','road-straight.glb', x, 0);
+  for (const z of [-8,-4,4,8]) place('roads','road-straight.glb', 0, z, Math.PI/2);
+
+  // --- street lamps (every other block, alternating sides) ---
+  const lampPos = [[-8,-3.2],[ -4,3.2],[4,-3.2],[8,3.2],[3.2,-8],[-3.2,8]];
+  lampPos.forEach(([x,z],i)=> place('roads','light-curved.glb', x, z, z<0?0:Math.PI, { lamp:true, lx:x, lz:z }));
+
+  // --- intersection furniture ---
+  place('roads','traffic-light.glb', 3.4, 3.4, Math.PI);
+  place('roads','traffic-light.glb', -3.4, -3.4, 0);
+  place('roads','road-sign-stop.glb', 3.6, -3.6, -Math.PI/2);
+
+  // --- construction corner: barriers + cones ---
+  for (let i=0;i<4;i++) place('racing','barrierWall.glb', -6+i*1.6, 2.6, 0);
+  for (let i=0;i<5;i++) place('roads','construction-cone.glb', -6+i*1.7, 0.2, 0);
+
+  // --- buildings along the avenue ---
+  const comm = ['building-a.glb','building-b.glb','building-c.glb','building-d.glb'];
+  [-8,-4,4,8].forEach((x,i)=>{
+    place('commercial', comm[i%4], x, -7.5, 0);
+    place('commercial', comm[(i+2)%4], x, 7.5, Math.PI);
+  });
+  place('commercial','building-skyscraper-a.glb', -6, -14, 0);
+  place('commercial','building-skyscraper-b.glb', 6, -14, 0);
+  place('commercial','building-skyscraper-a.glb', 0, 14, Math.PI);
+
+  // --- suburban ends ---
+  place('suburban','building-type-a.glb', -13, 5, Math.PI/2);
+  place('suburban','building-type-c.glb', 13, -5, -Math.PI/2);
+
+  // --- industrial backdrop ---
+  place('industrial','water-tower.glb', -13, -11, 0);
+  place('industrial','chimney-large.glb', 13, -11, 0);
+  place('industrial','shipping-container-a.glb', -11, 11, 0.4);
+  place('industrial','windmill.glb', 14, 11, 0);
+
+  // --- racing props: billboard + grandstand overlooking the avenue ---
+  place('racing','billboard.glb', -10, 10.5, Math.PI/4);
+  place('racing','grandStand.glb', 11, 6, -Math.PI/2);
+  place('racing','flagCheckers.glb', 2.5, 5.5, 0);
+
+  // --- cars on the road: taxi, sedan, race car ---
+  place('cars','taxi.glb', -5, 1.1, Math.PI/2);
+  place('cars','sedan.glb', 1.5, -1.1, -Math.PI/2);
+  place('cars','race.glb', 7, 1.1, Math.PI/2);
+
+  const total = jobs.length;
+  const overlay = document.getElementById('overlay');
+  let done = 0;
+  // load in parallel (sequential was far too slow); place as each resolves
+  await Promise.all(jobs.map(async (j) => {
+    try {
+      const gltf = await loader.loadAsync(j.url);
+      const obj = gltf.scene;
+      obj.position.set(j.x, 0, j.z);
+      obj.rotation.y = j.ry;
+      scene.add(obj);
+      if (j.lamp){
+        const l = new THREE.PointLight(0xffb066, 120, 28, 2);
+        l.position.set(j.lx, 4.2, j.lz);
+        scene.add(l); lampLights.push(l);
+      }
+    } catch(e){ errors.push(`toy scene: failed ${j.url}: ${e.message||e}`); }
+    done++;
+    overlay.innerHTML = `assembling toy scene&hellip; ${done}/${total}`;
+  }));
+  document.getElementById('overlay').classList.add('done');
+  window.__toyReady = true;
+  window.__toyStats = { jobs:total, errors:errors.length };
+}
+
+// --- minimal orbit control (inline) ---
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 400);
+const orbit = { theta:0.7, phi:1.08, radius:24, target:new THREE.Vector3(0,1.5,0), auto:true };
+let dragging=false, px=0, py=0;
+canvas.addEventListener('pointerdown', e=>{ dragging=true; px=e.clientX; py=e.clientY; orbit.auto=false; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', e=>{
+  if(!dragging) return;
+  orbit.theta -= (e.clientX-px)*0.008;
+  orbit.phi = THREE.MathUtils.clamp(orbit.phi-(e.clientY-py)*0.008, 0.15, Math.PI-0.15);
+  px=e.clientX; py=e.clientY;
+});
+canvas.addEventListener('pointerup', ()=>{ dragging=false; });
+canvas.addEventListener('pointercancel', ()=>{ dragging=false; });
+canvas.addEventListener('wheel', e=>{
+  e.preventDefault();
+  orbit.radius = THREE.MathUtils.clamp(orbit.radius*(1+Math.sign(e.deltaY)*0.12), 6, 90);
+  orbit.auto=false;
+}, { passive:false });
+window.addEventListener('resize', ()=>{
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+function loop(){
+  requestAnimationFrame(loop);
+  if (orbit.auto) orbit.theta += 0.0018;
+  const sp = Math.sin(orbit.phi);
+  camera.position.set(
+    orbit.target.x + orbit.radius*sp*Math.sin(orbit.theta),
+    orbit.target.y + orbit.radius*Math.cos(orbit.phi),
+    orbit.target.z + orbit.radius*sp*Math.cos(orbit.theta));
+  camera.lookAt(orbit.target);
+  renderer.render(scene, camera);
+}
+
+build();
+loop();
+</script>
+</body>
+</html>

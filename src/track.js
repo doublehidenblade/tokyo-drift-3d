@@ -201,4 +201,58 @@ export class Track {
     const m = margin || 0;
     return s > this.bridge.s0 - m && s < this.bridge.s1 + m;
   }
+
+  // Nearest centerline point to a world position (M6 world/geometry API).
+  // Coarse scan over every 8th sample, then refine in the neighborhood.
+  // Returns { point, tangent, s }:
+  //   point   — THREE.Vector3 on the track centerline (freshly allocated)
+  //   tangent — THREE.Vector3 unit tangent at s (freshly allocated)
+  //   s       — meters along the lap [0, length)
+  // Stable interface for the handling agent (guard-rail / barrier logic).
+  // Continuous: after the coarse sample search, the query point is projected
+  // onto the two track segments adjacent to the best sample, so the returned
+  // point/tangent/s are sub-sample accurate (not snapped to the ~5 m grid).
+  nearestTrackPoint(pos) {
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < this.N; i += 8) {
+      const p = this.pos[i];
+      const d = (p.x - pos.x) * (p.x - pos.x) +
+                (p.y - pos.y) * (p.y - pos.y) +
+                (p.z - pos.z) * (p.z - pos.z);
+      if (d < bd) { bd = d; best = i; }
+    }
+    // Refine: walk the neighborhood for the true minimum sample.
+    for (let k = -8; k <= 8; k++) {
+      const i = (best + k + this.N) % this.N;
+      const p = this.pos[i];
+      const d = (p.x - pos.x) * (p.x - pos.x) +
+                (p.y - pos.y) * (p.y - pos.y) +
+                (p.z - pos.z) * (p.z - pos.z);
+      if (d < bd) { bd = d; best = i; }
+    }
+    // Continuous projection onto the two segments around `best`.
+    const N = this.N, L = this.length;
+    let bs = (best / N) * L, bp = null, bt = null, bdd = Infinity;
+    const A = new THREE.Vector3(), B = new THREE.Vector3(), T = new THREE.Vector3();
+    for (const k of [-1, 0]) {
+      const i0 = (best + k + N) % N, i1 = (best + k + 1) % N;
+      A.copy(this.pos[i0]); B.copy(this.pos[i1]);
+      T.subVectors(B, A);
+      const segLen2 = T.lengthSq();
+      let t = segLen2 > 1e-12 ? ((pos.x - A.x) * T.x + (pos.y - A.y) * T.y + (pos.z - A.z) * T.z) / segLen2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const px = A.x + T.x * t, py = A.y + T.y * t, pz = A.z + T.z * t;
+      const d = (px - pos.x) * (px - pos.x) + (py - pos.y) * (py - pos.y) + (pz - pos.z) * (pz - pos.z);
+      if (d < bdd) {
+        bdd = d;
+        const s0 = (i0 / N) * L, s1 = (i1 / N) * L;
+        bs = s0 + (s1 >= s0 ? s1 - s0 : s1 - s0 + L) * t; // wrap-aware
+        if (bs >= L) bs -= L;
+        bp = new THREE.Vector3(px, py, pz);
+        bt = T.clone().normalize();
+      }
+    }
+    const f = this.frameAt(bs);
+    return { point: bp || f.pos.clone(), tangent: bt || f.tan.clone(), s: bs };
+  }
 }
