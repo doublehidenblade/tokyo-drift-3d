@@ -87,7 +87,10 @@ export function makeWindowTexture(variant, seed) {
   return t;
 }
 
-// Asphalt with lane markings. Canvas maps 30 m across; road shader repeats along Z.
+// Asphalt with lane markings. Canvas maps 30 m across (u); the road
+// geometry repeats along the lap via UV v = s/24.
+// M3 lane layout — one wide roadway, NO median:
+//   solid edge lines at +/-12 m, dashed lane lines at +/-8, +/-4, center 0.
 export function makeRoadTexture() {
   const [c, g] = canvas(256, 256);
   g.fillStyle = '#14161c';
@@ -98,15 +101,14 @@ export function makeRoadTexture() {
     g.fillStyle = rnd() < 0.5 ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.25)';
     g.fillRect((rnd() * 256) | 0, (rnd() * 256) | 0, 2, 2);
   }
-  // lane dividers at -6.5, 0, +6.5 m of a 26 m drivable width mapped to 256 px
   // canvas covers 30 m: px = (x + 15) / 30 * 256
   const px = (x) => ((x + 15) / 30) * 256;
   g.fillStyle = '#e8ecf4';
-  // edge lines (solid)
-  g.fillRect(px(-13) - 2, 0, 4, 256);
-  g.fillRect(px(13) - 2, 0, 4, 256);
-  // dashed lane lines
-  for (const x of [-6.5, 0, 6.5]) {
+  // solid edge lines at +/-12
+  g.fillRect(px(-12) - 2, 0, 4, 256);
+  g.fillRect(px(12) - 2, 0, 4, 256);
+  // dashed lane lines at +/-8, +/-4 and center 0
+  for (const x of [-8, -4, 0, 4, 8]) {
     for (let y = 0; y < 256; y += 64) g.fillRect(px(x) - 2, y + 8, 4, 32);
   }
   const t = new THREE.CanvasTexture(c);
@@ -134,6 +136,22 @@ export function makeGantryTexture() {
   }
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+// Checkered start/finish line strip, laid flat across the road at s=0.
+export function makeStartLineTexture() {
+  const [c, g] = canvas(128, 32);
+  const n = 16, m = 4, cw = 128 / n, ch = 32 / m;
+  for (let y = 0; y < m; y++) {
+    for (let x = 0; x < n; x++) {
+      g.fillStyle = (x + y) % 2 ? '#f2f4f8' : '#0b0d12';
+      g.fillRect(x * cw, y * ch, cw, ch);
+    }
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
   return t;
 }
 

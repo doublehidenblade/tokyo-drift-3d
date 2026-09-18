@@ -1,18 +1,28 @@
-// M2 input: no on-screen GAS/BRAKE/steer buttons. The car auto-accelerates;
-// holding the left/right half of the screen steers; a NITRO button
-// (bottom-right) boosts. Harness can inject via setInput.
-export const input = { left: false, right: false, nitro: false };
+// M3 input: no on-screen GAS/BRAKE/steer buttons. The car auto-accelerates;
+// holding the left/right half of the screen steers; one TAP on the NITRO
+// button burns the whole meter at once (no holding, no regen — nitro comes
+// from bottle pickups on the road). Harness can inject via setInput.
+export const input = { left: false, right: false, nitroPulse: false };
 
 export function setInput(s) {
-  for (const k of ['left', 'right', 'nitro']) {
+  for (const k of ['left', 'right']) {
     if (k in s) input[k] = !!s[k];
   }
-  syncNitroStyle();
+  if (s.nitro) pulseNitro();
 }
 
-function syncNitroStyle() {
+let flashTimer = 0;
+function flashNitro() {
   const el = document.getElementById('btn-nitro');
-  if (el) el.classList.toggle('on', !!input.nitro);
+  if (!el) return;
+  el.classList.add('on');
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => el.classList.remove('on'), 350);
+}
+
+export function pulseNitro() {
+  input.nitroPulse = true; // consumed by the next physics step
+  flashNitro();
 }
 
 export function bindInput() {
@@ -41,26 +51,24 @@ export function bindInput() {
   zone.addEventListener('pointercancel', release);
   zone.addEventListener('contextmenu', (e) => e.preventDefault());
 
+  // One tap = burn the whole meter. No hold.
   const nitroBtn = document.getElementById('btn-nitro');
-  const nOn = (e) => { e.preventDefault(); e.stopPropagation(); input.nitro = true; syncNitroStyle(); };
-  const nOff = (e) => { e.preventDefault(); input.nitro = false; syncNitroStyle(); };
-  nitroBtn.addEventListener('pointerdown', nOn);
-  nitroBtn.addEventListener('pointerup', nOff);
-  nitroBtn.addEventListener('pointercancel', nOff);
-  nitroBtn.addEventListener('pointerleave', nOff);
+  nitroBtn.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); e.stopPropagation(); pulseNitro();
+  });
   nitroBtn.addEventListener('contextmenu', (e) => e.preventDefault());
 
-  const keymap = {
-    ArrowLeft: 'left', KeyA: 'left',
-    ArrowRight: 'right', KeyD: 'right',
-    Space: 'nitro', ShiftLeft: 'nitro', ShiftRight: 'nitro',
-  };
+  const keymap = { ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right' };
   window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+      if (!e.repeat) { e.preventDefault(); pulseNitro(); }
+      return;
+    }
     const k = keymap[e.code];
-    if (k) { e.preventDefault(); input[k] = true; syncNitroStyle(); }
+    if (k) { e.preventDefault(); input[k] = true; }
   });
   window.addEventListener('keyup', (e) => {
     const k = keymap[e.code];
-    if (k) { e.preventDefault(); input[k] = false; syncNitroStyle(); }
+    if (k) { e.preventDefault(); input[k] = false; }
   });
 }
