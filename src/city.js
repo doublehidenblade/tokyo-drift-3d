@@ -11,7 +11,8 @@
 import * as THREE from 'three';
 import { CFG } from './config.js';
 import {
-  mulberry32, makeWindowTexture, makeGlassTexture, makeRoadTexture,
+  mulberry32, makeWindowTexture, makeRoofTexture, makeStorefrontTexture,
+  makeSidewalkTexture, makeAwningTexture, makeGlassTexture, makeRoadTexture,
   makeGantryTexture, makeSignTexture, makeBoardTexture, makeDirPanelTexture,
   makeTunnelTexture, makeGlowTexture, makeWetStreakTexture, makeEnvTexture,
   makeStartLineTexture,
@@ -21,6 +22,10 @@ const SIGN_WORDS = [
   ['24H', '#7df9ff'], ['酒', '#ff5fa2'], ['NEON', '#ff9f43'], ['喫茶', '#b6ffe0'],
   ['DRIFT', '#ff5fa2'], ['夜', '#7df9ff'], ['RAMEN', '#ffd27a'], ['東京', '#c4b5fd'],
   ['カラオケ', '#ff8a5c'], ['BAR', '#b6ffe0'], ['寿司', '#ffd27a'], ['GAME', '#7df9ff'],
+  ['ラーメン', '#ffd27a'], ['パチンコ', '#ff5fa2'], ['ホテル', '#7df9ff'], ['薬', '#b6ffe0'],
+  ['本', '#ff9f43'], ['映画', '#c4b5fd'], ['駅', '#7df9ff'], ['居酒屋', '#ff8a5c'],
+  ['焼肉', '#ff5fa2'], ['コンビニ', '#b6ffe0'], ['カフェ', '#ffd27a'], ['温泉', '#7df9ff'],
+  ['交番', '#7df9ff'], ['ダーツ', '#ff9f43'], ['CD', '#c4b5fd'], ['駐車場', '#b6ffe0'],
 ];
 
 const DIR_PANELS = [
@@ -48,6 +53,7 @@ const _lat2 = new THREE.Vector3();
 const _tan2 = new THREE.Vector3();
 const _up0 = new THREE.Vector3(0, 1, 0);
 const _one = new THREE.Vector3(1, 1, 1);
+const _beaconCol = new THREE.Color(); // beacon pulse scratch (no per-frame alloc)
 const _f = {}; // shared track-frame scratch
 
 // Yaw-only instance placement (upright objects: buildings, trees, pillars).
@@ -89,13 +95,15 @@ export function buildCity(scene, physics, track) {
     return Math.abs(u) < W.w / 2 + margin && Math.abs(v) < W.d / 2 + margin;
   }
 
-  // ---- Lighting / atmosphere (M2 approach) ----
-  scene.add(new THREE.HemisphereLight(0x2a3a5f, 0x05060a, 0.6));
+  // ---- Lighting / atmosphere (M4: synthwave grade) ----
+  // Teal-tinted hemisphere so the whole night reads cyan; subtle
+  // blue-purple exponential haze for depth.
+  scene.add(new THREE.HemisphereLight(0x2e4a6e, 0x05060a, 0.65));
   const dir = new THREE.DirectionalLight(0x8fb4ff, 0.4);
   dir.position.set(-120, 200, -80);
   scene.add(dir);
-  scene.background = new THREE.Color(0x05070f);
-  scene.fog = new THREE.Fog(0x070a14, 130, 950);
+  scene.background = new THREE.Color(0x070a18);
+  scene.fog = new THREE.FogExp2(0x0d1233, 0.0011);
   scene.environment = makeEnvTexture();
   // Tunnel-only ambient boost, driven per-frame by main.js (never pitch black).
   const tunnelAmbient = new THREE.AmbientLight(0xaac4ff, 0);
@@ -211,17 +219,17 @@ export function buildCity(scene, physics, track) {
       ribbonGeometry(CFG.roadHalf + 1.5, 0.02),
       new THREE.MeshStandardMaterial({
         map: roadTex, emissiveMap: roadTex, emissive: 0x9db8ff,
-        emissiveIntensity: 0.22, roughness: 0.38, metalness: 0.5,
-        envMapIntensity: 1.1,
+        emissiveIntensity: 0.30, roughness: 0.32, metalness: 0.55,
+        envMapIntensity: 1.3,
       })
     );
     scene.add(road);
-    // Wet streak overlay: additive fake reflections.
+    // Wet streak overlay: additive fake reflections (brighter, denser).
     const wetTex = makeWetStreakTexture();
     const wet = new THREE.Mesh(
       ribbonGeometry(CFG.roadHalf + 1.5, 0.05),
       new THREE.MeshBasicMaterial({
-        map: wetTex, transparent: true, opacity: 0.55,
+        map: wetTex, transparent: true, opacity: 0.6,
         blending: THREE.AdditiveBlending, depthWrite: false,
       })
     );
@@ -280,8 +288,14 @@ export function buildCity(scene, physics, track) {
     const tlen = TUN.s1 - TUN.s0;
     const nSeg = Math.ceil(tlen / 8);
     stats.tunnelSegs = nSeg;
+    const tunnelTex = makeTunnelTexture();
     const wallMat = new THREE.MeshStandardMaterial({
-      map: makeTunnelTexture(), roughness: 0.85, metalness: 0.05,
+      map: tunnelTex, roughness: 0.85, metalness: 0.05,
+      // M4: the tube is never pure black — a flat dim emissive lifts the
+      // walls/ceiling so the tunnel reads as a lit space even between
+      // point lights. (No emissiveMap: the wall texture is too dark and
+      // would multiply the glow back to black.)
+      emissive: 0x46586e, emissiveIntensity: 0.55,
     });
     const wallIM = new THREE.InstancedMesh(
       new THREE.BoxGeometry(1.0, 8.5, 8.4), wallMat, nSeg * 2);
@@ -328,11 +342,12 @@ export function buildCity(scene, physics, track) {
     }
     scIM.instanceMatrix.needsUpdate = true;
     scene.add(scIM);
-    // 4 real point lights so standard materials inside are never flat black.
-    for (let k = 0; k < 4; k++) {
-      const s = TUN.s0 + tlen * (0.15 + k * 0.235);
+    // M4: 8 real point lights so standard materials inside are never flat
+    // black (the tube is ~900 m; 4 lights left long dark gaps).
+    for (let k = 0; k < 8; k++) {
+      const s = TUN.s0 + tlen * (0.06 + k * 0.125);
       track.toWorld(s, k % 2 ? -6 : 6, 6.2, _p2);
-      const pl = new THREE.PointLight(0x9fd0ff, 500, 75, 1.8);
+      const pl = new THREE.PointLight(0x9fd0ff, 900, 110, 1.8);
       pl.position.copy(_p2);
       scene.add(pl);
     }
@@ -361,25 +376,12 @@ export function buildCity(scene, physics, track) {
     };
     portalAt(TUN.s0, 0x35f2ff); // cyan entrance
     portalAt(TUN.s1, 0xff9f43); // orange exit
-    // Hill ridge over the tunnel: flattened dark spheres whose tops sit
-    // ~15-25 m above the road, so the tube visibly bores through a hill.
-    const nR = Math.ceil(tlen / 25);
-    const ridgeIM = new THREE.InstancedMesh(
-      new THREE.SphereGeometry(1, 12, 10),
-      new THREE.MeshStandardMaterial({
-        color: 0x0b181d, roughness: 1, metalness: 0, flatShading: true,
-      }), nR);
-    for (let k = 0; k < nR; k++) {
-      const s = TUN.s0 + k * 25 + 12;
-      track.toWorld(s, (rnd() - 0.5) * 16, 2, _p2);
-      track.frameAt(s, _f);
-      _e.set(0, _f.yaw + rnd() * 0.6, 0); _q.setFromEuler(_e);
-      _s.set(18 + rnd() * 14, 12 + rnd() * 10, 16 + rnd() * 10);
-      _m.compose(_p2, _q, _s);
-      ridgeIM.setMatrixAt(k, _m);
-    }
-    ridgeIM.instanceMatrix.needsUpdate = true;
-    scene.add(ridgeIM);
+    // M4: the hill-ridge spheres are REMOVED. They were decorative (a hill
+    // over the tunnel), but their interiors intersected the tube and
+    // blocked the chase camera (raycast: #0b181d sphere 7 m ahead at
+    // s=3800), and when raised above the tube they read as a black blob
+    // looming over the tunnel interior. The tube + portals carry the
+    // tunnel visually on their own.
   }
 
   // ---- Bridge: Rainbow-Bridge-style suspension bridge, blue-lit ----
@@ -487,7 +489,9 @@ export function buildCity(scene, physics, track) {
     // blue-lit caps + blue glow at the waterline (approach piers).
     const pilIM = new THREE.InstancedMesh(
       new THREE.BoxGeometry(3.5, 1, 5),
-      new THREE.MeshStandardMaterial({ color: 0x23262e, roughness: 0.9 }),
+      new THREE.MeshStandardMaterial({
+        color: 0x23262e, emissive: 0x0a1430, emissiveIntensity: 0.8, roughness: 0.9,
+      }),
       Math.ceil(blen / 80) + 1);
     const capIM = new THREE.InstancedMesh(
       new THREE.BoxGeometry(5, 1.2, 6),
@@ -523,7 +527,9 @@ export function buildCity(scene, physics, track) {
         const ph = Math.max(1, base.y - W.y);
         const pylon = new THREE.Mesh(
           new THREE.BoxGeometry(4.5, ph, 6),
-          new THREE.MeshStandardMaterial({ color: 0x23262e, roughness: 0.9 }));
+          new THREE.MeshStandardMaterial({
+            color: 0x23262e, emissive: 0x0a1430, emissiveIntensity: 0.8, roughness: 0.9,
+          }));
         pylon.position.set(base.x, W.y + ph / 2, base.z);
         pylon.rotation.y = _f.yaw;
         scene.add(pylon);
@@ -543,7 +549,9 @@ export function buildCity(scene, physics, track) {
     }
     stats.towers = 2;
     // Anchorage blocks at both bridge ends.
-    const anchMat = new THREE.MeshStandardMaterial({ color: 0x3a3f4a, roughness: 0.9 });
+    const anchMat = new THREE.MeshStandardMaterial({
+      color: 0x3a3f4a, emissive: 0x0a0e18, emissiveIntensity: 0.7, roughness: 0.9,
+    });
     for (const sA of [BR.s0 + 5, BR.s1 - 5]) {
       track.frameAt(sA, _f);
       for (const side of [-1, 1]) {
@@ -665,7 +673,9 @@ export function buildCity(scene, physics, track) {
     {
       track.toWorld(sMid, W.w / 2 + 50, 0, _p2);
       const lx = _p2.x, lz = _p2.z, baseY = -8;
-      const darkMat = new THREE.MeshStandardMaterial({ color: 0x141821, roughness: 0.8 });
+      const darkMat = new THREE.MeshStandardMaterial({
+        color: 0x141821, emissive: 0x201207, emissiveIntensity: 0.7, roughness: 0.8,
+      });
       const edgeMat = new THREE.MeshBasicMaterial({ color: 0xff7a1a });
       const widths = [18, 14.5, 11, 8, 5.5, 3.5];
       const segH = 20;
@@ -741,17 +751,22 @@ export function buildCity(scene, physics, track) {
     scene.add(streakIM);
   }
 
-  // ---- Buildings: 6 variants (4 lit-window + 2 reflective glass) ----
+  // ---- Buildings: 6 anime-facade variants + 2 reflective glass ----
+  // Single-material boxes (one draw pass each) + a shared thin roof-cap
+  // instanced mesh for rooftop detail. Towers may get a stepped-back upper
+  // tier (collider covers the full envelope so meshes stay inside it).
   // Skipped inside the water channel, near the tunnel tube, and beside the
   // elevated bridge (their bases would float above the ground plane).
+  // Facades sit at |lat| >= 18 — clear of the +/-14 m car corridor.
   const variants = [];
-  for (let v = 0; v < 4; v++) {
-    const tex = makeWindowTexture(v, 1000 + v);
+  for (let v = 0; v < 6; v++) {
+    const sideTex = makeWindowTexture(v, 1000 + v);
     variants.push({
       mat: new THREE.MeshStandardMaterial({
-        map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 0.95,
-        roughness: 0.9, metalness: 0.05, envMapIntensity: 0.5,
-      }), list: [],
+        map: sideTex, emissiveMap: sideTex, emissive: 0xffffff, emissiveIntensity: 1.0,
+        roughness: 0.85, metalness: 0.08, envMapIntensity: 0.6,
+      }),
+      list: [], upperList: [],
     });
   }
   for (let v = 0; v < 2; v++) {
@@ -760,10 +775,13 @@ export function buildCity(scene, physics, track) {
       mat: new THREE.MeshStandardMaterial({
         map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 0.55,
         roughness: 0.3, metalness: 0.75, envMapIntensity: 1.5,
-      }), list: [],
+      }),
+      list: [], upperList: [],
     });
   }
   const buildings = [];
+  const beacons = []; // {x,y,z,phase} — red aviation lights, sine-pulsed in update()
+  const hvacList = []; // rooftop AC boxes
   for (const side of [-1, 1]) {
     let s = 20;
     while (s < L - 20) {
@@ -771,7 +789,7 @@ export function buildCity(scene, physics, track) {
       const tower = rnd() < 0.3;
       const w = 8 + rnd() * 12, d = 8 + rnd() * 12;
       const h = tower ? 35 + rnd() * 35 : 8 + rnd() * 24;
-      const latC = side * (CFG.roadHalf + 5 + w / 2 + rnd() * 38);
+      const latC = side * (CFG.roadHalf + 6 + w / 2 + rnd() * 38);
       track.frameAt(s, _f);
       track.toWorld(s, latC, 0, _p2);
       const skipWater = inWaterRect(_p2.x, _p2.z, 40);
@@ -782,40 +800,128 @@ export function buildCity(scene, physics, track) {
           s, side, w, d, h, latC,
           latF: latC - side * (w / 2), // road-facing facade lateral
           yBase: _p2.y, x: _p2.x, z: _p2.z, yaw: _f.yaw,
+          upper: null,
         };
+        const vi = tower && rnd() < 0.55 ? 6 + ((rnd() * 2) | 0) : (rnd() * 6) | 0;
+        // Stepped-back upper tier on some towers (window variants only).
+        if (tower && vi < 6 && rnd() < 0.55) {
+          b.upper = { w: w * 0.68, d: d * 0.68, h: h * (0.3 + rnd() * 0.2) };
+          variants[vi].upperList.push(b);
+          stats.setbacks = (stats.setbacks | 0) + 1;
+        }
         buildings.push(b);
-        const vi = tower && rnd() < 0.6 ? 4 + ((rnd() * 2) | 0) : (rnd() * 4) | 0;
         variants[vi].list.push(b);
-        physics.addStaticBox(w / 2, h / 2, d / 2, _p2.x, _p2.y + h / 2, _p2.z, _f.yaw, 'building');
+        const totalH = b.h + (b.upper ? b.upper.h : 0);
+        physics.addStaticBox(w / 2, totalH / 2, d / 2,
+          _p2.x, _p2.y + totalH / 2, _p2.z, _f.yaw, 'building');
+        // Rooftop HVAC box on ~45% of roofs (top tier if set back).
+        const topW = b.upper ? b.upper.w : b.w, topD = b.upper ? b.upper.d : b.d;
+        const topH = totalH;
+        if (rnd() < 0.45 && topW > 5 && topD > 5) {
+          track.toWorld(s + (rnd() - 0.5) * topD * 0.4,
+            latC + (rnd() - 0.5) * topW * 0.4, topH + 0.9, _p2);
+          hvacList.push({ x: _p2.x, y: _p2.y, z: _p2.z, yaw: b.yaw });
+        }
+        // Red aviation beacons on the road-facing top corners of towers.
+        if (totalH >= 24) {
+          const bw = topW / 2 - 0.5, bd = topD / 2 - 0.5;
+          for (const cz of [-bd, bd]) {
+            track.toWorld(s + cz, latC - side * bw, topH + 0.75, _p2);
+            beacons.push({ x: _p2.x, y: _p2.y, z: _p2.z, phase: rnd() * Math.PI * 2 });
+            addGlow(glowSmall, _p2.x, _p2.y, _p2.z, 0xff2a2a);
+          }
+        }
       }
       s += (inD ? 10 : 16) + rnd() * 4; // ~10 m downtown, ~16 m elsewhere
     }
   }
   stats.buildings = buildings.length;
+  stats.beacons = beacons.length;
+  stats.hvac = hvacList.length;
   const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+  const roofCaps = []; // {x,y,z,yaw,w,d} — thin detailed rooftop slabs
   for (const v of variants) {
     const im = new THREE.InstancedMesh(boxGeo, v.mat, Math.max(1, v.list.length));
-    v.list.forEach((b, i) => composeInst(im, i, b.x, b.yBase + b.h / 2, b.z, b.yaw, b.w, b.h, b.d));
+    v.list.forEach((b, i) => {
+      composeInst(im, i, b.x, b.yBase + b.h / 2, b.z, b.yaw, b.w, b.h, b.d);
+      const tw = b.upper ? b.upper.w : b.w, td = b.upper ? b.upper.d : b.d;
+      const th = b.upper ? b.h + b.upper.h : b.h;
+      roofCaps.push({ x: b.x, y: b.yBase + th + 0.21, z: b.z, yaw: b.yaw, w: tw, d: td });
+    });
     im.count = v.list.length;
     im.instanceMatrix.needsUpdate = true;
     scene.add(im);
+    if (v.upperList.length) {
+      const uim = new THREE.InstancedMesh(boxGeo, v.mat, v.upperList.length);
+      v.upperList.forEach((b, i) => composeInst(uim, i, b.x,
+        b.yBase + b.h + b.upper.h / 2, b.z, b.yaw, b.upper.w, b.upper.h, b.upper.d));
+      uim.instanceMatrix.needsUpdate = true;
+      scene.add(uim);
+    }
+  }
+  // Thin roof caps with the detailed rooftop skin — one extra draw call
+  // total (a 6-material box would cost 6 renderer passes per mesh).
+  {
+    const capTex = makeRoofTexture(7777);
+    const capIM = new THREE.InstancedMesh(boxGeo,
+      new THREE.MeshStandardMaterial({
+        map: capTex, emissiveMap: capTex, emissive: 0xffffff, emissiveIntensity: 0.5,
+        roughness: 0.95, metalness: 0.05,
+      }), Math.max(1, roofCaps.length));
+    roofCaps.forEach((rc, i) => composeInst(capIM, i, rc.x, rc.y, rc.z, rc.yaw,
+      rc.w + 0.15, 0.3, rc.d + 0.15));
+    capIM.count = roofCaps.length;
+    capIM.instanceMatrix.needsUpdate = true;
+    scene.add(capIM);
+    stats.roofCaps = roofCaps.length;
+  }
+  // Rooftop HVAC boxes (dark, faintly lit so they never read as black blobs).
+  {
+    const him = new THREE.InstancedMesh(boxGeo,
+      new THREE.MeshStandardMaterial({
+        color: 0x161b24, emissive: 0x0d1420, emissiveIntensity: 0.7, roughness: 0.9,
+      }), Math.max(1, hvacList.length));
+    hvacList.forEach((hb, i) => composeInst(him, i, hb.x, hb.y, hb.z, hb.yaw,
+      2.2 + (i % 3) * 0.5, 1.1, 1.6));
+    him.count = hvacList.length;
+    him.instanceMatrix.needsUpdate = true;
+    scene.add(him);
+  }
+  // Aviation beacons: instanced red spheres, smooth ~2 s sine pulse
+  // (NOT a harsh on/off timer). Colors updated per-frame in api.update().
+  const beaconIM = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(0.32, 8, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffffff }), Math.max(1, beacons.length));
+  {
+    const bc = new THREE.Color();
+    beacons.forEach((bn, i) => {
+      composeInst(beaconIM, i, bn.x, bn.y, bn.z, 0, 1, 1, 1);
+      beaconIM.setColorAt(i, bc.setRGB(0.5, 0.05, 0.05));
+    });
+    beaconIM.count = beacons.length;
+    beaconIM.instanceMatrix.needsUpdate = true;
+    if (beaconIM.instanceColor) beaconIM.instanceColor.needsUpdate = true;
+    scene.add(beaconIM);
   }
 
   // ---- Neon signs: facade-mounted ONLY, never floating ----
   // Two passes: collect candidates with the district/elsewhere probabilities,
-  // then stride-sample down to the ~200-sign target for an even spread.
+  // then stride-sample down to the ~320-sign target for an even spread.
   {
     const vCands = [], bCands = [];
     for (const b of buildings) {
-      const pV = inDistrict(b.s) ? 0.45 : 0.30;
-      const pB = inDistrict(b.s) ? 0.30 : 0.20;
+      const pV = inDistrict(b.s) ? 0.62 : 0.45;
+      const pB = inDistrict(b.s) ? 0.40 : 0.30;
       const r = rnd();
       const wi = (rnd() * SIGN_WORDS.length) | 0;
       if (r < pV) {
+        // 35% are low storefront-fixed vertical signboards.
+        const shop = rnd() < 0.35;
         vCands.push({
           b, wi, sSign: b.s + (rnd() * 2 - 1) * Math.max(0, b.d / 2 - 2),
-          y: b.yBase + 5 + rnd() * Math.max(2, b.h - 12),
-          sw: 1.4, sh: 3.5 + rnd() * 4,
+          y: shop ? b.yBase + 3.4 + rnd() * 2
+                  : b.yBase + 5 + rnd() * Math.max(2, b.h - 12),
+          sw: shop ? 1.0 : 1.4, sh: shop ? 2.4 + rnd() * 1.2 : 3.5 + rnd() * 4,
         });
       } else if (r < pV + pB) {
         bCands.push({
@@ -831,27 +937,27 @@ export function buildCity(scene, physics, track) {
       for (let i = 0; i < cap; i++) out.push(arr[Math.floor(i * step)]);
       return out;
     };
-    const vSigns = stridePick(vCands, 120);
-    const bSigns = stridePick(bCands, 80);
+    const vSigns = stridePick(vCands, 190);
+    const bSigns = stridePick(bCands, 130);
     stats.vSigns = vSigns.length; stats.bSigns = bSigns.length;
     // Per-word face meshes + shared dark back boxes (the mounting hardware).
     const vFaceIMs = SIGN_WORDS.map(([word, color]) => {
       const im = new THREE.InstancedMesh(
         new THREE.PlaneGeometry(1, 1),
-        new THREE.MeshBasicMaterial({ map: makeSignTexture(word, color) }), 24);
+        new THREE.MeshBasicMaterial({ map: makeSignTexture(word, color) }), 40);
       im.count = 0; scene.add(im); return im;
     });
     const vBackIM = new THREE.InstancedMesh(boxGeo,
-      new THREE.MeshStandardMaterial({ color: 0x0a0c12, roughness: 0.8 }), 120);
+      new THREE.MeshStandardMaterial({ color: 0x0a0c12, roughness: 0.8 }), 190);
     vBackIM.count = 0; scene.add(vBackIM);
     const bFaceIMs = SIGN_WORDS.map(([word, color]) => {
       const im = new THREE.InstancedMesh(
         new THREE.PlaneGeometry(1, 1),
-        new THREE.MeshBasicMaterial({ map: makeBoardTexture(word, color) }), 16);
+        new THREE.MeshBasicMaterial({ map: makeBoardTexture(word, color) }), 28);
       im.count = 0; scene.add(im); return im;
     });
     const bBackIM = new THREE.InstancedMesh(boxGeo,
-      new THREE.MeshStandardMaterial({ color: 0x0a0c12, roughness: 0.8 }), 80);
+      new THREE.MeshStandardMaterial({ color: 0x0a0c12, roughness: 0.8 }), 130);
     bBackIM.count = 0; scene.add(bBackIM);
     // Mount one sign on its building's road-facing facade: the face plane's
     // +z (normal) points at the road; the back box is sunk into the wall.
@@ -896,7 +1002,66 @@ export function buildCity(scene, physics, track) {
     }
   }
 
+  // ---- Lit shopfronts at building bases: glowing storefront planes +
+  // striped awnings, all facade-mounted (never floating) ----
+  {
+    const cands = [];
+    for (const b of buildings) {
+      if (b.h > 26 || Math.abs(b.latF) > 30 || rnd() > 0.5) continue;
+      cands.push({
+        b, vi: (rnd() * 3) | 0,
+        sSign: b.s + (rnd() * 2 - 1) * Math.max(0, b.d / 2 - 2.5),
+        w: 4 + rnd() * 2,
+      });
+    }
+    const faceIMs = [0, 1, 2].map((v) => {
+      const im = new THREE.InstancedMesh(
+        new THREE.PlaneGeometry(1, 1),
+        new THREE.MeshBasicMaterial({ map: makeStorefrontTexture(v, 9000 + v) }), 60);
+      im.count = 0; scene.add(im); return im;
+    });
+    const awnIM = new THREE.InstancedMesh(boxGeo,
+      new THREE.MeshStandardMaterial({
+        map: makeAwningTexture(31337), emissiveMap: makeAwningTexture(31337),
+        emissive: 0xffffff, emissiveIntensity: 0.35, roughness: 0.85,
+      }), 160);
+    awnIM.count = 0; scene.add(awnIM);
+    for (const st of cands) {
+      const { b } = st;
+      track.frameAt(st.sSign, _f);
+      _n.copy(_f.lat); _n.y = 0;
+      if (_n.lengthSq() < 1e-6) _n.set(1, 0, 0);
+      _n.normalize().multiplyScalar(-b.side); // toward the road
+      _x.crossVectors(_up0, _n).normalize();
+      _y.crossVectors(_n, _x).normalize();
+      // storefront glass at ground level
+      track.toWorld(st.sSign, b.latF, 0, _p2);
+      track.toWorld(st.sSign, b.latF, b.yBase + 1.5 - _p2.y, _p2);
+      _m.makeBasis(_x, _y, _n);
+      _m.scale(_v.set(st.w, 2.6, 1));
+      _p.copy(_p2).addScaledVector(_n, 0.04);
+      _m.setPosition(_p);
+      const fim = faceIMs[st.vi];
+      if (fim.count < fim.instanceMatrix.count) fim.setMatrixAt(fim.count++, _m);
+      // awning jutting 1.5 m out over the sidewalk
+      _m.makeBasis(_x, _y, _n);
+      _m.scale(_v.set(st.w + 0.8, 0.18, 1.5));
+      _p.copy(_p2).addScaledVector(_n, 0.75);
+      _p.y = _p2.y + 1.75; // just above the glass top
+      _m.setPosition(_p);
+      if (awnIM.count < awnIM.instanceMatrix.count)
+        awnIM.setMatrixAt(awnIM.count++, _m);
+      addGlow(glowSmall, _p2.x, _p2.y, _p2.z, 0xffb35c);
+    }
+    for (const im of [...faceIMs, awnIM]) {
+      im.instanceMatrix.needsUpdate = true;
+      if (im.count === 0) im.visible = false;
+    }
+    stats.storefronts = cands.length;
+  }
+
   // ---- Street lamps every 30 m, both sides (skip tunnel +/-25, bridge) ----
+  // Teal/cyan heads + glow for the synthwave street tint.
   {
     const lampS = [];
     for (let s = 0; s < L; s += 30) {
@@ -909,14 +1074,14 @@ export function buildCity(scene, physics, track) {
       new THREE.MeshStandardMaterial({ color: 0x1a1e28, roughness: 0.8 }), n);
     const heads = new THREE.InstancedMesh(
       new THREE.SphereGeometry(0.28, 8, 8),
-      new THREE.MeshBasicMaterial({ color: 0xffe6b0 }), n);
+      new THREE.MeshBasicMaterial({ color: 0xcdf3ff }), n);
     let i = 0;
     lampS.forEach((s) => {
       for (const side of [-1, 1]) {
         placeFrame(poles, i, s, side * (CFG.roadHalf + 2.6), 3.6, 1, 1, 1);
         placeFrame(heads, i, s, side * (CFG.roadHalf + 1.7), 7.15, 1, 1, 1);
         track.toWorld(s, side * (CFG.roadHalf + 1.7), 7.15, _p2);
-        addGlow(glowSmall, _p2.x, _p2.y, _p2.z, 0xffd9a0);
+        addGlow(glowSmall, _p2.x, _p2.y, _p2.z, 0x4de8ff);
         i++;
       }
     });
@@ -929,16 +1094,20 @@ export function buildCity(scene, physics, track) {
   // ---- Power poles + sagging catenary wires (one side, skip tunnel/bridge) ----
   {
     const px = CFG.roadHalf + 5.2, ps = [];
-    for (let s = 0; s < L; s += 40) {
+    for (let s = 0; s < L; s += 34) {
       if (inTun(s, 45) || track.inBridge(s, 0)) continue;
       ps.push(s);
     }
     const poleIM = new THREE.InstancedMesh(
       new THREE.CylinderGeometry(0.14, 0.18, 9, 6),
-      new THREE.MeshStandardMaterial({ color: 0x23262e, roughness: 0.85 }), ps.length);
+      new THREE.MeshStandardMaterial({
+        color: 0x23262e, emissive: 0x0a0e18, emissiveIntensity: 0.6, roughness: 0.85,
+      }), ps.length);
     const armIM = new THREE.InstancedMesh(
       new THREE.BoxGeometry(1.7, 0.12, 0.12),
-      new THREE.MeshStandardMaterial({ color: 0x23262e, roughness: 0.85 }), ps.length);
+      new THREE.MeshStandardMaterial({
+        color: 0x23262e, emissive: 0x0a0e18, emissiveIntensity: 0.6, roughness: 0.85,
+      }), ps.length);
     const tops = [];
     ps.forEach((s, i) => {
       placeFrame(poleIM, i, s, px, 4.5, 1, 1, 1);
@@ -958,8 +1127,8 @@ export function buildCity(scene, physics, track) {
     for (let i = 0; i + 1 < tops.length; i++) {
       const A = tops[i], B = tops[i + 1];
       if (track.distAhead(A.s, B.s) > 60) continue;
-      for (const off of [-0.7, 0.7]) {
-        const SEG = 8, sag = 1.3;
+      for (const [off, sag] of [[-0.7, 1.3], [0, 1.7], [0.7, 1.3]]) {
+        const SEG = 8;
         let prev = null;
         for (let k = 0; k <= SEG; k++) {
           const t = k / SEG;
@@ -977,6 +1146,8 @@ export function buildCity(scene, physics, track) {
   }
 
   // ---- Trees every ~24 m, both sides (skip tunnel +/-25, bridge) ----
+  // Pruned street trees: tapered trunk + two foliage blobs, faint emissive
+  // so canopies read deep green instead of black at night.
   {
     const items = [];
     for (let s = 0; s < L; s += 24) {
@@ -987,23 +1158,75 @@ export function buildCity(scene, physics, track) {
       }
     }
     const trunkIM = new THREE.InstancedMesh(
-      new THREE.CylinderGeometry(0.12, 0.18, 1.6, 6),
-      new THREE.MeshStandardMaterial({ color: 0x2b2119, roughness: 0.9 }), items.length);
+      new THREE.CylinderGeometry(0.13, 0.22, 2.0, 6),
+      new THREE.MeshStandardMaterial({
+        color: 0x2e2318, emissive: 0x0d0a06, emissiveIntensity: 0.7, roughness: 0.9,
+      }), items.length);
     const folIM = new THREE.InstancedMesh(
-      new THREE.ConeGeometry(1.15, 2.8, 7),
-      new THREE.MeshStandardMaterial({ color: 0x1d4a38, roughness: 0.9 }), items.length);
+      new THREE.IcosahedronGeometry(1.35, 0),
+      new THREE.MeshStandardMaterial({
+        color: 0xffffff, emissive: 0x0c241a, emissiveIntensity: 0.55,
+        roughness: 0.9, flatShading: true,
+      }), items.length * 2);
     const col = new THREE.Color();
     items.forEach((t, i) => {
       const lat = t.side * (CFG.roadHalf + 3.8 + rnd() * 1.2);
-      placeFrame(trunkIM, i, t.s, lat, 0.8 * t.sc, t.sc, t.sc, t.sc);
-      placeFrame(folIM, i, t.s, lat, 2.9 * t.sc, t.sc, t.sc, t.sc);
-      folIM.setColorAt(i, col.setHSL(0.38 + rnd() * 0.08, 0.45, 0.22 + rnd() * 0.1));
+      const sc = t.sc;
+      placeFrame(trunkIM, i, t.s, lat, 1.0 * sc, sc, sc, sc);
+      // lower canopy blob
+      placeFrame(folIM, i * 2, t.s, lat, 2.6 * sc, sc, sc * 0.78, sc);
+      folIM.setColorAt(i * 2, col.setHSL(0.36 + rnd() * 0.1, 0.5, 0.16 + rnd() * 0.1));
+      // upper canopy blob
+      placeFrame(folIM, i * 2 + 1, t.s + 0.4, lat, 3.9 * sc, sc * 0.68, sc * 0.6, sc * 0.68);
+      folIM.setColorAt(i * 2 + 1, col.setHSL(0.36 + rnd() * 0.1, 0.5, 0.2 + rnd() * 0.1));
     });
     trunkIM.instanceMatrix.needsUpdate = true;
     folIM.instanceMatrix.needsUpdate = true;
     if (folIM.instanceColor) folIM.instanceColor.needsUpdate = true;
     scene.add(trunkIM, folIM);
     stats.trees = items.length;
+  }
+
+  // ---- Sidewalks: raised lighter-concrete strips, both sides ----
+  // Ribbon strips following the track frame; skipped inside the tunnel
+  // (would hit the tube walls) and on the bridge (deck preserved).
+  {
+    const swTex = makeSidewalkTexture(4242);
+    const swMat = new THREE.MeshStandardMaterial({
+      map: swTex, roughness: 0.95, metalness: 0.02, side: THREE.DoubleSide,
+    });
+    const LAT0 = CFG.roadHalf + 1.6, LAT1 = CFG.roadHalf + 5.4, LIFT = 0.14;
+    for (const side of [-1, 1]) {
+      const step = 4, nS = Math.ceil(L / step);
+      const verts = [], uvs = [], idx = [];
+      const rowOf = new Array(nS + 1).fill(-1);
+      for (let k = 0; k <= nS; k++) {
+        const s = Math.min(k * step, L - 0.01);
+        if (inTun(s, 14) || track.inBridge(s, 8)) continue;
+        track.frameAt(s, _f);
+        const row = verts.length / 3;
+        rowOf[k] = row;
+        for (const lat of [side * LAT0, side * LAT1]) {
+          verts.push(
+            _f.pos.x + _f.lat.x * lat + _f.up.x * LIFT,
+            _f.pos.y + _f.lat.y * lat + _f.up.y * LIFT,
+            _f.pos.z + _f.lat.z * lat + _f.up.z * LIFT);
+          uvs.push(lat === side * LAT0 ? 0 : 1, s / 8);
+        }
+      }
+      for (let k = 0; k < nS; k++) {
+        const r0 = rowOf[k], r1 = rowOf[k + 1];
+        if (r0 < 0 || r1 < 0) continue;
+        idx.push(r0, r1, r0 + 1, r1, r1 + 1, r0 + 1);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+      g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      g.setIndex(idx);
+      g.computeVertexNormals();
+      scene.add(new THREE.Mesh(g, swMat));
+    }
+    stats.sidewalks = 2;
   }
 
   // ---- Directional gantries OVER the road (panels bolted to the beam) ----
@@ -1016,7 +1239,7 @@ export function buildCity(scene, physics, track) {
     const postMat = new THREE.MeshStandardMaterial({
       color: 0x39404e, roughness: 0.6, metalness: 0.5,
     });
-    const px = CFG.roadHalf + 1.9;
+    const px = CFG.roadHalf + 3.6; // M4: beyond car reach (14.0 m) — no phantom post hits
     for (const side of [-1, 1]) {
       const post = new THREE.Mesh(new THREE.BoxGeometry(0.6, 7.8, 0.6), postMat);
       post.position.set(side * px, 3.9, 0);
@@ -1050,7 +1273,7 @@ export function buildCity(scene, physics, track) {
     grp.position.copy(_f.pos);
     grp.quaternion.setFromRotationMatrix(
       new THREE.Matrix4().makeBasis(_f.lat, _f.up, _f.tan));
-    const px = CFG.roadHalf + 1.9;
+    const px = CFG.roadHalf + 3.6; // M4: beyond car reach (14.0 m) — no phantom post hits
     const postMat = new THREE.MeshStandardMaterial({
       color: 0x8a1f1f, roughness: 0.6, metalness: 0.3,
     });
@@ -1100,7 +1323,11 @@ export function buildCity(scene, physics, track) {
     grp.position.copy(_f.pos);
     grp.quaternion.setFromRotationMatrix(
       new THREE.Matrix4().makeBasis(_f.lat, _f.up, _f.tan));
-    const deckMat = new THREE.MeshStandardMaterial({ color: 0x2a2e38, roughness: 0.8 });
+    const deckMat = new THREE.MeshStandardMaterial({
+      // M4: faint emissive so the deck/columns never read as black blobs
+      // from the road below.
+      color: 0x2a2e38, emissive: 0x0d1220, emissiveIntensity: 0.8, roughness: 0.8,
+    });
     const deck = new THREE.Mesh(new THREE.BoxGeometry(34, 0.4, 3), deckMat);
     deck.position.set(0, DECK_TOP - 0.2, 0);
     grp.add(deck);
@@ -1140,11 +1367,19 @@ export function buildCity(scene, physics, track) {
     overWalkers.bodyIM = bodyIM;
     overWalkers.headIM = headIM;
     stats.walkers = NW;
-    // Static sidewalk peds: every ~90 m, both sides, skip tunnel + bridge.
+    // Static sidewalk peds: every ~55 m, both sides, skip tunnel + bridge.
+    // Varied heights, builds, and clothing colors.
     const items = [];
-    for (let s = 0; s < L; s += 90) {
+    for (let s = 0; s < L; s += 55) {
       if (inTun(s, 20) || track.inBridge(s, 5)) continue;
-      for (const side of [-1, 1]) items.push({ s: s + rnd() * 30, side });
+      for (const side of [-1, 1]) {
+        if (rnd() < 0.2) continue;
+        items.push({
+          s: s + rnd() * 30, side,
+          lat: side * (CFG.roadHalf + 2.2 + rnd() * 2.2),
+          hgt: 0.85 + rnd() * 0.3,
+        });
+      }
     }
     const sBodyIM = new THREE.InstancedMesh(
       new THREE.CapsuleGeometry(0.22, 0.75, 3, 8),
@@ -1153,17 +1388,77 @@ export function buildCity(scene, physics, track) {
       new THREE.SphereGeometry(0.16, 8, 8),
       new THREE.MeshStandardMaterial({ color: 0xd9a98c, roughness: 0.7 }), items.length);
     items.forEach((pd, i) => {
-      track.toWorld(pd.s, pd.side * (CFG.roadHalf + 2.5), 0, _p2);
-      composeInst(sBodyIM, i, _p2.x, _p2.y + 0.85, _p2.z,
-        rnd() * Math.PI * 2, 1, 0.92 + rnd() * 0.16, 1);
-      composeInst(sHeadIM, i, _p2.x, _p2.y + 1.62, _p2.z, 0, 1, 1, 1);
-      sBodyIM.setColorAt(i, col.setHSL(rnd(), 0.5, 0.35 + rnd() * 0.2));
+      track.toWorld(pd.s, pd.lat, 0.14, _p2);
+      composeInst(sBodyIM, i, _p2.x, _p2.y + 0.85 * pd.hgt, _p2.z,
+        rnd() * Math.PI * 2, 0.9 + rnd() * 0.3, pd.hgt, 0.9 + rnd() * 0.3);
+      composeInst(sHeadIM, i, _p2.x, _p2.y + (0.85 + 0.77) * pd.hgt, _p2.z, 0, 1, 1, 1);
+      sBodyIM.setColorAt(i, col.setHSL(rnd(), 0.35 + rnd() * 0.4, 0.25 + rnd() * 0.35));
     });
     sBodyIM.instanceMatrix.needsUpdate = true;
     sHeadIM.instanceMatrix.needsUpdate = true;
     if (sBodyIM.instanceColor) sBodyIM.instanceColor.needsUpdate = true;
     scene.add(sBodyIM, sHeadIM);
     stats.peds = items.length;
+  }
+
+  // ---- Parked cars along the outer sidewalk edge ----
+  // Simple low-poly bodies + cabins + red tail strips, parked on the
+  // sidewalk at |lat| = 15.6 — outside the +/-14 m car corridor, with
+  // colliders so they are solid.
+  {
+    const items = [];
+    for (let s = 30; s < L - 30; s += 46) {
+      if (inTun(s, 30) || track.inBridge(s, 10)) continue;
+      for (const side of [-1, 1]) {
+        if (rnd() < 0.5) continue;
+        items.push({ s: s + rnd() * 10, side });
+      }
+    }
+    const PCOL = [0xd8dce4, 0x1a1d24, 0x8a93a5, 0x5a2020, 0x1f3a5a, 0x2a4a3a];
+    const nP = Math.max(1, items.length);
+    const pBodyIM = new THREE.InstancedMesh(
+      boxGeo,
+      new THREE.MeshStandardMaterial({ roughness: 0.4, metalness: 0.5, envMapIntensity: 1.0 }),
+      nP);
+    const pCabIM = new THREE.InstancedMesh(
+      boxGeo,
+      new THREE.MeshStandardMaterial({ color: 0x0d1118, roughness: 0.35, metalness: 0.4 }),
+      nP);
+    const pTailIM = new THREE.InstancedMesh(
+      boxGeo, new THREE.MeshBasicMaterial({ color: 0xff2a2a }), nP);
+    const col = new THREE.Color();
+    items.forEach((pc, i) => {
+      const lat = pc.side * (CFG.roadHalf + 3.6);
+      track.frameAt(pc.s, _f);
+      _p.copy(_f.pos).addScaledVector(_f.lat, lat);
+      _m.makeBasis(_f.lat, _f.up, _f.tan);
+      _m.scale(_v.set(1.9, 0.62, 4.4));
+      _p2.copy(_p).addScaledVector(_f.up, 0.69);
+      _m.setPosition(_p2);
+      pBodyIM.setMatrixAt(i, _m);
+      pBodyIM.setColorAt(i, col.set(PCOL[(rnd() * PCOL.length) | 0]));
+      _m.makeBasis(_f.lat, _f.up, _f.tan);
+      _m.scale(_v.set(1.7, 0.5, 2.2));
+      _p2.copy(_p).addScaledVector(_f.up, 1.19).addScaledVector(_f.tan, -0.3);
+      _m.setPosition(_p2);
+      pCabIM.setMatrixAt(i, _m);
+      _m.makeBasis(_f.lat, _f.up, _f.tan);
+      _m.scale(_v.set(1.7, 0.12, 0.1));
+      _p2.copy(_p).addScaledVector(_f.up, 0.76).addScaledVector(_f.tan, -2.21);
+      _m.setPosition(_p2);
+      pTailIM.setMatrixAt(i, _m);
+      track.toWorld(pc.s, lat, 0.74, _p2);
+      physics.addStaticBox(0.95, 0.6, 2.2, _p2.x, _p2.y, _p2.z, _f.yaw, 'building');
+      track.toWorld(pc.s, lat, 0.76, _p2);
+      addGlow(glowSmall, _p2.x, _p2.y, _p2.z, 0xff2a2a);
+    });
+    pBodyIM.count = pCabIM.count = pTailIM.count = items.length;
+    for (const im of [pBodyIM, pCabIM, pTailIM]) {
+      im.instanceMatrix.needsUpdate = true;
+      scene.add(im);
+    }
+    if (pBodyIM.instanceColor) pBodyIM.instanceColor.needsUpdate = true;
+    stats.parked = items.length;
   }
 
   // ---- Nitro bottles: glowing pickups synced to physics.bottles ----
@@ -1217,6 +1512,15 @@ export function buildCity(scene, physics, track) {
   const api = {
     setTunnelGlow: (f) => { tunnelAmbient.intensity = 0.9 * f; },
     update: (dt, t, bottles) => {
+      // Aviation beacons: smooth ~2 s sine pulse — gradual fade, never a
+      // harsh on/off timer.
+      if (beaconIM.count > 0 && beaconIM.instanceColor) {
+        for (let i = 0; i < beacons.length; i++) {
+          const k = 0.12 + 0.88 * (0.5 + 0.5 * Math.sin(Math.PI * t + beacons[i].phase));
+          beaconIM.setColorAt(i, _beaconCol.setRGB(k, k * 0.1, k * 0.1));
+        }
+        beaconIM.instanceColor.needsUpdate = true;
+      }
       // Overpass walkers pacing across the deck.
       const { bodyIM, headIM } = overWalkers;
       for (let i = 0; i < overWalkers.length; i++) {
@@ -1254,6 +1558,14 @@ export function buildCity(scene, physics, track) {
       bottleCapIM.instanceMatrix.needsUpdate = true;
     },
     syncTraffic: (traffic) => trafficVis.sync(traffic),
+    // M4 harness: building boxes near s (for camera-clip diagnosis).
+    buildingsNear: (s, range) => buildings
+      .filter((b) => Math.abs(b.s - s) < range)
+      .map((b) => ({
+        s: +b.s.toFixed(1), latC: +b.latC.toFixed(1), w: +b.w.toFixed(1),
+        d: +b.d.toFixed(1), h: +b.h.toFixed(1),
+        latF: +b.latF.toFixed(1), x: +b.x.toFixed(1), z: +b.z.toFixed(1),
+      })),
   };
   // Initialize walkers + bottles before the first frame.
   api.update(0, 0, physics.bottles);

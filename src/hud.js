@@ -34,3 +34,29 @@ export function updateHud(o) {
     el.nitro.classList.toggle('burn', !!o.nitroOn);
   }
 }
+
+// Pause button (top-right) + PAUSED pill. The button toggles via pointerdown
+// (touch-friendly) and never reaches the steering touchzone (it sits above it).
+export function bindPauseButton(onToggle) {
+  el.pauseBtn = document.getElementById('btn-pause');
+  el.pausePill = document.getElementById('paused-pill');
+  if (el.pauseBtn) {
+    el.pauseBtn.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); e.stopPropagation(); onToggle();
+    });
+    el.pauseBtn.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
+  setPausedUI(false);
+  setPauseVisible(false); // boot lands on the menu; the button appears on START
+}
+
+export function setPausedUI(paused) {
+  if (el.pauseBtn) el.pauseBtn.textContent = paused ? '▶' : '⏸';
+  if (el.pausePill) el.pausePill.classList.toggle('show', !!paused);
+}
+
+// The button lives under the menu overlay (z-30 < z-50) but the retro menu
+// is translucent up top, so hide it outright while the menu is shown.
+export function setPauseVisible(v) {
+  if (el.pauseBtn) el.pauseBtn.style.display = v ? 'flex' : 'none';
+}

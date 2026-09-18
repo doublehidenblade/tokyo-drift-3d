@@ -137,8 +137,13 @@ export class Track {
     return { pos, yaw, pitch, bank };
   }
 
-  // Full frame: pos, tan (unit, includes slope), lat (unit, banked,
-  // points to the driver's right), upB (unit, banked), yaw, bank.
+  // Full frame: pos, tan (unit, includes slope), lat (unit, banked).
+  // lat = (cos(yaw), 0, -sin(yaw)) with yaw = atan2(t.x, t.z). For a driver
+  // facing along +tan, +lat points to the driver's LEFT (M4 correction:
+  // earlier revisions wrongly documented it as the driver's right, which
+  // inverted the steering). Screen mapping is NEVER assumed from this —
+  // main.js derives it per-frame from the camera projection.
+  // upB (unit, banked), yaw, bank.
   // Reuses scratch objects when `out` is supplied; otherwise allocates.
   frameAt(s, out) {
     const r = this._frameAtRaw(s);

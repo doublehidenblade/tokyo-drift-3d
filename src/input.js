@@ -1,8 +1,15 @@
-// M3 input: no on-screen GAS/BRAKE/steer buttons. The car auto-accelerates;
+// M4 input: no on-screen GAS/BRAKE/steer buttons. The car auto-accelerates;
 // holding the left/right half of the screen steers; one TAP on the NITRO
 // button burns the whole meter at once (no holding, no regen — nitro comes
 // from bottle pickups on the road). Harness can inject via setInput.
-export const input = { left: false, right: false, nitroPulse: false };
+//
+// latDirSign is derived at runtime from the camera projection (main.js):
+// +1 when moving toward +lat moves the car toward screen-left, -1 when it
+// moves toward screen-right. Steering NEVER hardcodes the lat/screen
+// mapping — the M3 bug was a wrong hardcoded convention ("lat points to
+// the driver's right"; it actually points left), which the old world-space
+// harness check could not catch.
+export const input = { left: false, right: false, nitroPulse: false, latDirSign: 1 };
 
 export function setInput(s) {
   for (const k of ['left', 'right']) {

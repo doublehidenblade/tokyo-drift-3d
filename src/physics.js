@@ -75,7 +75,8 @@ export async function createPhysics(RAPIER, track) {
       .setAngularDamping(4.0)
       .lockRotations()
   );
-  const chassisColDesc = RAPIER.ColliderDesc.cuboid(ch.x, ch.y, ch.z)
+  const chassisColDesc = RAPIER.ColliderDesc.cuboid(ch.x, 0.75, ch.z)
+    .setTranslation(0, 0.35, 0) // spans road+0 .. road+1.5: covers the cabin
     .setDensity((CFG.carMassKg) / (8 * ch.x * ch.y * ch.z))
     .setFriction(0.4)
     .setRestitution(0.1)
@@ -108,15 +109,16 @@ export async function createPhysics(RAPIER, track) {
       .setTranslation(0, 0.7, 0)
       .lockRotations()
   );
-  const rivalColDesc = RAPIER.ColliderDesc.cuboid(ch.x, ch.y, ch.z)
+  const rivalColDesc = RAPIER.ColliderDesc.cuboid(ch.x, 0.75, ch.z)
+    .setTranslation(0, 0.35, 0) // match the player: full visual height
     .setDensity(150).setFriction(0.4).setCollisionGroups(RIVAL_HITS);
   rivalColDesc.setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
   const rivalCol = world.createCollider(rivalColDesc, rival);
   const rivalSt = { s: 40, lane: CFG.rivalLat };
 
   // ---- Traffic: track-space cars, real player contacts ----
-  const traffic = []; // {body, col, kind, lane, speed, s}
-  const trafficHandles = new Set();
+  const traffic = []; // {body, col, kind, lane, speed, s, slowT}
+  const trafficByHandle = new Map();
   function spawnTrafficCar(kind, i) {
     const lanes = kind === 'same' ? CFG.trafficLanes : CFG.oncomingLanes;
     const lane = lanes[(rnd() * lanes.length) | 0];
@@ -130,13 +132,14 @@ export async function createPhysics(RAPIER, track) {
         .setLinearDamping(0.0)
         .lockRotations()
     );
-    const cd = RAPIER.ColliderDesc.cuboid(ch.x, 0.35, ch.z)
+    const cd = RAPIER.ColliderDesc.cuboid(ch.x, 0.7, ch.z)
+      .setTranslation(0, 0.35, 0) // body at road+0.35 -> spans 0..1.4: cabin included
       .setDensity(120).setFriction(0.4).setRestitution(0.1)
       .setCollisionGroups(TRAFFIC_HITS);
     cd.setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
     const col = world.createCollider(cd, body);
-    trafficHandles.add(col.handle);
-    const car = { body, col, kind, lane, speed, s };
+    const car = { body, col, kind, lane, speed, s, slowT: 0 };
+    trafficByHandle.set(col.handle, car);
     traffic.push(car);
     return car;
   }
@@ -174,6 +177,74 @@ export async function createPhysics(RAPIER, track) {
     for (const cb of listeners) cb(kind, x, y, z);
   }
 
+  // M5: car-car bump-apart. On contact, the contact normal n (world XZ,
+  // from the player's center to the other car's center) is decomposed
+  // onto the track frame into lateral and longitudinal components. Each
+  // car is pushed AWAY from the other along n, scaled by the closing
+  // speed along n (faster hit = bigger shove), hard-clamped for arcade
+  // stability. Purely positional in track space — heading is untouched,
+  // so the car can never spin or leave the road.
+  const BUMP_K = 0.08;       // meters of shove per (m/s) of closing speed
+  const BUMP_MAX = 2.2;      // hard clamp on bump magnitude (m)
+  const BUMP_MIN_SEP = 0.35; // separation nudge when merely overlapping
+
+  function carBump(other, kind) {
+    // Resolve the other car's logical track-space state + body.
+    let oBody, oTanVel;
+    const isTraffic = kind === 'traffic';
+    if (isTraffic) {
+      const car = trafficByHandle.get(other);
+      if (!car) return;
+      oBody = car.body;
+      oTanVel = car.kind === 'same' ? car.speed : -car.speed;
+    } else if (kind === 'rival') {
+      oBody = rival;
+      oTanVel = CFG.rivalSpeed;
+    } else {
+      return;
+    }
+    track.frameAt(arcade.s, _f);
+    const pt = chassis.translation();
+    const ot = oBody.translation();
+    // Contact normal n: world-XZ direction from player center to other
+    // center, decomposed onto the track frame.
+    let nT = (ot.x - pt.x) * _f.tan.x + (ot.z - pt.z) * _f.tan.z;
+    let nL = (ot.x - pt.x) * _f.lat.x + (ot.z - pt.z) * _f.lat.z;
+    let nrm = Math.hypot(nT, nL);
+    if (nrm < 1e-4) { // dead-center overlap: fall back to lateral separation
+      const car = isTraffic ? trafficByHandle.get(other) : null;
+      const oLane = car ? car.lane : rivalSt.lane;
+      nT = 0; nL = oLane >= arcade.lat ? 1 : -1; nrm = 1;
+    }
+    nT /= nrm; nL /= nrm;
+    // Closing speed along the normal (player minus other, track space).
+    const pTan = arcade.speed * Math.cos(arcade.heading);
+    const pLat = arcade.speed * Math.sin(arcade.heading);
+    const closing = (pTan - oTanVel) * nT + pLat * nL;
+    const J = closing > 0 ? Math.min(closing * BUMP_K, BUMP_MAX) : BUMP_MIN_SEP;
+
+    // Player: pushed away from the other car (opposite the normal),
+    // clamped to the spline corridor so it can't leave the road.
+    const latMax = CFG.roadHalf + 0.6;
+    arcade.lat = Math.max(-latMax, Math.min(latMax, arcade.lat - nL * J));
+    // Longitudinal split: a head-on shove scrubs speed, a rear-end shove
+    // carries the player forward slightly. Never exceeds the speed cap.
+    const cap = arcade.nitroBurning ? CFG.nitroMaxSpeed : CFG.maxSpeed;
+    arcade.speed = Math.max(0, Math.min(cap, arcade.speed - nT * J * 0.5));
+
+    // Other car: pushed away along the normal, then slowed so it can't
+    // ghost through the player on the following steps.
+    if (isTraffic) {
+      const car = trafficByHandle.get(other);
+      car.lane = Math.max(-11.5, Math.min(11.5, car.lane + nL * J));
+      car.s = (((car.s + nT * J) % L) + L) % L;
+      car.slowT = 1.2;
+    } else {
+      rivalSt.lane = Math.max(-CFG.roadHalf, Math.min(CFG.roadHalf, rivalSt.lane + nL * J));
+      rivalSt.s = (((rivalSt.s + nT * J) % L) + L) % L;
+    }
+  }
+
   function step(dt, input, racing) {
     // --- Nitro: one tap burns the WHOLE meter; no regen over time ---
     if (input.nitroPulse) {
@@ -193,11 +264,22 @@ export async function createPhysics(RAPIER, track) {
 
     // Steering: heading offset from the spline tangent (kinematic bicycle
     // in track space — yaw rate falls with speed, no high-speed donuts).
-    // Screen-left = steer toward -lat (lat points to the driver's right).
-    const steerIn = (input.left ? 1 : 0) + (input.right ? -1 : 0);
-    if (arcade.speed > 0.5) {
-      arcade.heading += -steerIn * CFG.steerLatAccel / Math.max(arcade.speed, 5) * dt;
+    // M4: the lat<->screen mapping is derived at runtime (input.latDirSign
+    // is set every rendered frame by main.js from the camera projection:
+    // +1 when +lat appears screen-left). left input therefore always steers
+    // toward screen-left BY CONSTRUCTION — no hardcoded convention that a
+    // curve or a wrong comment can invert (that was the M3 reversal bug).
+    // heading > 0 moves the car toward +lat (see the lat update below).
+    const steerIn = ((input.left ? 1 : 0) - (input.right ? 1 : 0)) * (input.latDirSign || 1);
+    if (arcade.speed > 0.5 && steerIn !== 0) {
+      arcade.heading += steerIn * CFG.steerLatAccel / Math.max(arcade.speed, 5) * dt;
       arcade.heading = Math.max(-CFG.maxHeading, Math.min(CFG.maxHeading, arcade.heading));
+    } else if (steerIn === 0) {
+      // The wheel self-centers: with no input the car straightens onto the
+      // tangent. (M3 never decayed heading, so after any steering the car
+      // ground along the curb diagonally forever — the "sideways car".)
+      arcade.heading *= Math.exp(-5 * dt);
+      if (Math.abs(arcade.heading) < 0.002) arcade.heading = 0;
     }
     arcade.steerVis += ((steerIn * CFG.maxSteer) - arcade.steerVis) * Math.min(1, 12 * dt);
 
@@ -278,9 +360,20 @@ export async function createPhysics(RAPIER, track) {
     }
 
     // --- Traffic AI: spline followers; respawn ahead when left behind ---
+    // M4: traffic no longer ghosts through the player — it brakes when the
+    // player is directly ahead in its lane, and gets shoved aside + slowed
+    // when contact actually happens (see the collision handler below).
     for (const car of traffic) {
       const dirS = car.kind === 'same' ? 1 : -1;
-      car.s = (car.s + dirS * car.speed * dt) % L;
+      let effSpeed = car.speed;
+      if (car.slowT > 0) { car.slowT -= dt; effSpeed = car.speed * 0.45; }
+      else if (car.kind === 'same') {
+        const ahead = track.distAhead(car.s, arcade.s);
+        if (ahead > 0 && ahead < 35 && Math.abs(car.lane - arcade.lat) < 3.2) {
+          effSpeed = Math.min(car.speed, Math.max(arcade.speed * 0.85, 8));
+        }
+      }
+      car.s = (car.s + dirS * effSpeed * dt) % L;
       if (car.s < 0) car.s += L;
       if (track.distAhead(arcade.s, car.s) < -250) respawnTraffic(car, arcade.s);
       track.frameAt(car.s, _f);
@@ -291,9 +384,9 @@ export async function createPhysics(RAPIER, track) {
       }, true);
       car.body.setRotation(yawQuat(_f.yaw + (car.kind === 'same' ? 0 : Math.PI)), true);
       car.body.setLinvel({
-        x: dirS * _f.tan.x * car.speed,
-        y: dirS * _f.tan.y * car.speed,
-        z: dirS * _f.tan.z * car.speed,
+        x: dirS * _f.tan.x * effSpeed,
+        y: dirS * _f.tan.y * effSpeed,
+        z: dirS * _f.tan.z * effSpeed,
       }, true);
     }
 
@@ -310,15 +403,19 @@ export async function createPhysics(RAPIER, track) {
       let kind = null;
       if (curbHandles.has(other)) kind = 'curb';
       else if (buildingHandles.has(other)) kind = 'building';
-      else if (trafficHandles.has(other)) kind = 'traffic';
+      else if (trafficByHandle.has(other)) kind = 'traffic';
       else if (other === rivalCol.handle || other === chassisCol.handle) kind = 'rival';
       if (!kind) return;
       const src = playerHit ? chassis.translation() : rival.translation();
       if (playerHit) {
+        carBump(other, kind);
         if (kind === 'curb') arcade.speed *= 0.86;
         else if (kind === 'traffic') arcade.speed *= 0.75;
         else if (kind === 'building') arcade.speed *= 0.55;
         else if (kind === 'rival') arcade.speed *= 0.8;
+        // M4: a hit never spins the car — snap the heading back toward the
+        // track tangent and let the speed scrub + sparks sell the impact.
+        arcade.heading *= 0.25;
       }
       emit(kind, src.x, 0.4, src.z);
     });
@@ -371,5 +468,18 @@ export async function createPhysics(RAPIER, track) {
     arcade, bottles, track, addStaticBox, onContact, step, stepN, reset, teleportS,
     playerSpeed: () => arcade.speed,
     rawEvents: () => rawEventCount,
+    // Harness: collider half-extents + vertical offsets (body origin heights)
+    // so the projection check can compare Rapier cuboids vs rendered meshes.
+    colliderInfo: () => ({
+      player: { half: [ch.x, 0.75, ch.z], colOff: 0.35, bodyH: ch.y },
+      traffic: { half: [ch.x, 0.7, ch.z], colOff: 0.35, bodyH: 0.35 },
+    }),
+    // Harness: place traffic car i relative to the player (gauntlet scenario).
+    placeTraffic: (i, sDelta, lane) => {
+      const car = traffic[i % traffic.length];
+      car.s = (((arcade.s + sDelta) % L) + L) % L;
+      car.lane = lane;
+      car.slowT = 0;
+    },
   };
 }
