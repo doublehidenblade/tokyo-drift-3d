@@ -1,47 +1,48 @@
-// Shared tuning constants for Milestone 2.
+// Shared tuning constants for Milestone 3 (closed lap circuit).
 export const CFG = {
   fixedDt: 1 / 60,
-  trackLength: 3200,      // city extent along +Z (m)
-  roadHalf: 13,           // drivable half-width (m)
-  curbX: 13.75,           // curb centerline |x| (m)
+  roadHalf: 12,           // drivable half-width (m); no median — one wide roadway
+  laneW: 4,               // lane width; the car is 70% of a lane wide
+  curbLat: 12.75,         // curb centerline lateral offset (m)
   curbTopY: 0.30,         // curb top surface height (m)
 
-  // Player car (dynamic body, arcade velocity control — see physics.js note)
+  // Player car (dynamic body, arcade track-space control — see physics.js)
   carMassKg: 900,
-  chassisHalf: { x: 0.95, y: 0.35, z: 2.2 },
-  wheelRadius: 0.35,
+  chassisHalf: { x: 1.4, y: 0.4, z: 2.8 }, // 2.8 m wide = 70% of 4 m lane
+  wheelRadius: 0.42,
   arcadeAccel: 22,        // m/s^2 auto-acceleration toward cap
-  nitroAccel: 38,         // m/s^2 while nitro is burning
-  steerLatAccel: 16,      // lateral accel for yaw rate (m/s^2)
+  nitroAccel: 40,         // m/s^2 while nitro is burning
+  steerLatAccel: 16,      // lateral accel for heading rate (m/s^2)
+  maxHeading: 0.6,        // clamp on heading offset from tangent (rad)
   maxSpeed: 60,           // m/s (~216 km/h)
   nitroMaxSpeed: 75,      // m/s (~270 km/h)
-  nitroDrain: 0.38,       // meter fraction per second while boosting
-  nitroRecharge: 0.14,    // meter fraction per second while not boosting
+  nitroBurnRate: 0.5,     // meter fraction per second while burning (full burn ~2 s)
+  nitroPickupFill: 0.25,  // meter fill per nitro bottle pickup
   maxSteer: 0.55,         // visual front-wheel steer (rad)
 
-  // Spawn
-  spawnX: 6.5,
-  spawnZ: -20,
+  laps: 3,                // race length
 
-  // Rival (simple AI)
+  // Spawn (track space)
+  spawnS: 0,
+  spawnLat: 5,
+
+  // Rival (follows the spline)
   rivalSpeed: 30,         // m/s
-  rivalLaneX: 8.5,
+  rivalLat: 5,
 
-  // Same-direction traffic
-  trafficLanes: [3.0, 6.5, 10.0],
-  trafficCount: 6,
+  // Same-direction traffic (right side laterals)
+  trafficLanes: [3, 7, 11],
+  trafficCount: 10,
   trafficSpeedMin: 19,
   trafficSpeedMax: 30,
 
-  // Oncoming traffic (other side of the median)
-  oncomingLanes: [-3.0, -6.5, -10.0],
-  oncomingCount: 6,
+  // Oncoming traffic (left side laterals, s decreasing)
+  oncomingLanes: [-3, -7, -11],
+  oncomingCount: 10,
   oncomingSpeedMin: 21,
   oncomingSpeedMax: 30,
 
-  // Tunnel (road passes through a lit tube here)
-  tunnelStart: 620,
-  tunnelEnd: 920,
-  tunnelHalfW: 14.5,      // inner wall |x|
+  // Tunnel tube
+  tunnelHalfW: 13.5,      // inner wall lateral offset
   tunnelH: 7.2,           // ceiling underside height
 };
