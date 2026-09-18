@@ -1,0 +1,206 @@
+{
+  "scene": "fh6-night-street",
+  "units": "meters",
+  "notes": "Blender +Z-up source; three.js Y-up in GLB",
+  "categories": {
+    "buildings": [
+      {
+        "name": "bt-fh6-bldg-a",
+        "footprint_m": [
+          10.8,
+          10.8
+        ],
+        "height_m": 17.8
+      },
+      {
+        "name": "bt-fh6-bldg-b",
+        "footprint_m": [
+          11.8,
+          12.8
+        ],
+        "height_m": 24.200000000000003
+      },
+      {
+        "name": "bt-fh6-bldg-c",
+        "footprint_m": [
+          12.8,
+          14.8
+        ],
+        "height_m": 30.6
+      }
+    ],
+    "signs": [
+      {
+        "name": "bt-fh6-sign-orange",
+        "footprint_m": [
+          0.6,
+          2.9
+        ],
+        "height_m": 7.9
+      },
+      {
+        "name": "bt-fh6-sign-red",
+        "footprint_m": [
+          0.6,
+          2.5
+        ],
+        "height_m": 5.9
+      },
+      {
+        "name": "bt-fh6-sign-green",
+        "footprint_m": [
+          0.6,
+          2.6999999999999997
+        ],
+        "height_m": 6.9
+      },
+      {
+        "name": "bt-fh6-sign-blue",
+        "footprint_m": [
+          0.6,
+          2.5
+        ],
+        "height_m": 5.9
+      },
+      {
+        "name": "bt-fh6-sign-magenta",
+        "footprint_m": [
+          0.6,
+          3.0999999999999996
+        ],
+        "height_m": 8.9
+      }
+    ],
+    "props": [
+      {
+        "name": "bt-fh6-lamp",
+        "footprint_m": [
+          0.6,
+          0.6
+        ],
+        "height_m": 7.6
+      },
+      {
+        "name": "bt-fh6-guardrail",
+        "footprint_m": [
+          3.2,
+          0.15
+        ],
+        "height_m": 1.1
+      },
+      {
+        "name": "bt-fh6-pole",
+        "footprint_m": [
+          0.5,
+          0.5
+        ],
+        "height_m": 9.2
+      },
+      {
+        "name": "bt-fh6-wires",
+        "footprint_m": [
+          2.0,
+          25.0
+        ],
+        "height_m": 0.1
+      },
+      {
+        "name": "bt-fh6-gantry",
+        "footprint_m": [
+          17.0,
+          1.0
+        ],
+        "height_m": 6.9
+      },
+      {
+        "name": "bt-fh6-cone",
+        "footprint_m": [
+          0.36,
+          0.36
+        ],
+        "height_m": 0.6
+      },
+      {
+        "name": "bt-fh6-bicycle",
+        "footprint_m": [
+          0.5,
+          1.5
+        ],
+        "height_m": 1.05
+      }
+    ],
+    "vegetation": [
+      {
+        "name": "bt-fh6-tree",
+        "footprint_m": [
+          1.6,
+          1.6
+        ],
+        "height_m": 5.6
+      }
+    ],
+    "vehicles": [
+      {
+        "name": "bt-fh6-van",
+        "footprint_m": [
+          1.95,
+          4.8
+        ],
+        "height_m": 2.5
+      },
+      {
+        "name": "bt-fh6-sedan",
+        "footprint_m": [
+          1.85,
+          4.5
+        ],
+        "height_m": 1.5
+      }
+    ],
+    "pedestrians": [
+      {
+        "name": "bt-fh6-ped-a",
+        "footprint_m": [
+          0.5,
+          0.35
+        ],
+        "height_m": 1.66
+      },
+      {
+        "name": "bt-fh6-ped-b",
+        "footprint_m": [
+          0.5,
+          0.35
+        ],
+        "height_m": 1.66
+      },
+      {
+        "name": "bt-fh6-ped-c",
+        "footprint_m": [
+          0.5,
+          0.35
+        ],
+        "height_m": 1.66
+      }
+    ],
+    "roads": [
+      {
+        "name": "bt-fh6-ground",
+        "footprint_m": [
+          18.6,
+          80.0
+        ],
+        "height_m": 0.22
+      },
+      {
+        "name": "bt-fh6-markings",
+        "footprint_m": [
+          14.0,
+          80.0
+        ],
+        "height_m": 0.02
+      }
+    ]
+  },
+  "asset_count": 23
+}
