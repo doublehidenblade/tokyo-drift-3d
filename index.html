@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#05070f">
-<title>Tokyo Drift 3D — Neon Night (M3)</title>
+<title>Tokyo Drift 3D — Neon Night (M4)</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html, body { width:100%; height:100%; overflow:hidden; background:#05070f; touch-action:none;
@@ -43,13 +43,70 @@
     letter-spacing:.08em; display:flex; align-items:center; justify-content:center;
     backdrop-filter:blur(4px); touch-action:none; text-shadow:0 0 12px rgba(53,242,255,.8); }
   #btn-nitro.on { background:rgba(53,242,255,.45); color:#04121a; }
+  /* Pause button (top-right, small) + PAUSED pill */
+  #btn-pause { position:fixed; z-index:30; top:calc(8px + env(safe-area-inset-top)); right:10px;
+    width:38px; height:38px; border-radius:10px; border:1px solid rgba(255,255,255,.28);
+    background:rgba(8,12,22,.55); color:#fff; font-size:15px; line-height:1;
+    display:flex; align-items:center; justify-content:center; backdrop-filter:blur(4px);
+    touch-action:none; opacity:.9; cursor:pointer; }
+  #btn-pause:active { background:rgba(53,242,255,.35); }
+  #paused-pill { position:fixed; z-index:30; top:calc(56px + env(safe-area-inset-top)); left:50%;
+    transform:translateX(-50%); padding:5px 14px 5px 18px; border-radius:999px;
+    background:rgba(8,12,22,.72); border:1px solid rgba(255,255,255,.25);
+    font-size:11px; letter-spacing:.3em; font-weight:700; display:none; pointer-events:none; }
+  #paused-pill.show { display:block; }
+  /* 80s retro main menu — pure CSS art (procedural; not designer artwork).
+     The overlay is mostly transparent up top so the attract-mode 3D scene
+     (autopilot driving, front-low camera) shows through behind the title. */
   #overlay { position:fixed; inset:0; z-index:50; display:flex; flex-direction:column;
-    align-items:center; justify-content:center; gap:14px; background:rgba(4,6,12,.72); backdrop-filter:blur(3px); }
-  #overlay h1 { font-size:30px; letter-spacing:.12em; font-weight:800;
-    background:linear-gradient(90deg,#ff5fa2,#7df9ff); -webkit-background-clip:text; background-clip:text; color:transparent; }
-  #overlay p { font-size:13px; opacity:.75; text-align:center; padding:0 24px; line-height:1.7; }
-  #overlay .tap { margin-top:10px; padding:14px 42px; border-radius:999px; font-size:17px; font-weight:800;
-    letter-spacing:.1em; color:#04120a; background:#7dff9e; border:none; }
+    align-items:center; justify-content:center; gap:10px; overflow:hidden;
+    background:linear-gradient(180deg, rgba(5,6,16,.10) 0%, rgba(5,6,16,.30) 42%,
+      rgba(10,4,22,.88) 78%, rgba(6,2,16,.94) 100%); }
+  /* CRT scanlines */
+  #overlay::after { content:""; position:absolute; inset:0; z-index:3; pointer-events:none;
+    background:repeating-linear-gradient(180deg, rgba(0,0,0,.14) 0 1px, transparent 1px 3px);
+    opacity:.45; }
+  /* synthwave sun with slats */
+  #menu-sun { position:absolute; z-index:0; top:7%; left:50%; transform:translateX(-50%);
+    width:min(58vw,280px); aspect-ratio:1/1; border-radius:50%; pointer-events:none;
+    background:linear-gradient(180deg,#ffd319 0%,#ff9e3d 32%,#ff2975 62%,#8c1eff 100%);
+    -webkit-mask-image:repeating-linear-gradient(180deg,#000 0 9px,transparent 9px 12px);
+    mask-image:repeating-linear-gradient(180deg,#000 0 9px,transparent 9px 12px);
+    opacity:.5; filter:blur(1px) drop-shadow(0 0 34px rgba(255,41,117,.55)); }
+  /* perspective grid floor */
+  #menu-grid { position:absolute; z-index:0; left:-30%; right:-30%; bottom:-6%; height:36%;
+    pointer-events:none; opacity:.4;
+    background:
+      linear-gradient(transparent calc(100% - 2px), rgba(53,242,255,.65) 100%),
+      linear-gradient(90deg, transparent calc(100% - 2px), rgba(255,95,162,.65) 100%);
+    background-size:46px 30px;
+    transform:perspective(340px) rotateX(64deg); transform-origin:bottom;
+    -webkit-mask-image:linear-gradient(180deg,transparent,#000 55%);
+    mask-image:linear-gradient(180deg,transparent,#000 55%); }
+  #overlay h1 { position:relative; z-index:2; font-family:"Arial Black","Helvetica Neue",Helvetica,Impact,sans-serif;
+    font-size:clamp(36px,10.5vw,62px); font-weight:900; letter-spacing:.05em; line-height:1.05;
+    text-align:center; transform:skewX(-6deg);
+    background:linear-gradient(180deg,#ff5fa2 0%,#ff9fd6 30%,#ffffff 48%,#7df9ff 58%,#2fc4ff 100%);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+    filter:drop-shadow(0 2px 0 rgba(24,2,44,.95)) drop-shadow(0 0 24px rgba(255,95,162,.45)); }
+  #menu-jp { position:relative; z-index:2; font-size:19px; letter-spacing:.55em; text-indent:.55em;
+    color:#ff8fc4; text-shadow:0 0 14px rgba(255,95,162,.85), 0 0 3px rgba(255,95,162,.9); font-weight:700; }
+  #menu-tag { position:relative; z-index:2; font-size:11px; letter-spacing:.32em; text-indent:.32em;
+    color:#7df9ff; opacity:.9; text-shadow:0 0 10px rgba(53,242,255,.7); font-weight:600; }
+  #overlay p { position:relative; z-index:2; font-size:12px; opacity:.78; text-align:center;
+    padding:0 26px; line-height:1.75; max-width:520px; margin-top:6px; }
+  #overlay .tap { position:relative; z-index:2; margin-top:12px; padding:15px 48px; border-radius:6px;
+    font-family:"Arial Black","Helvetica Neue",Helvetica,Arial,sans-serif; font-size:18px; font-weight:900;
+    letter-spacing:.14em; text-indent:.14em; color:#8ff7ff; background:rgba(8,10,28,.45);
+    border:2px solid #35f2ff; cursor:pointer;
+    text-shadow:0 0 12px rgba(53,242,255,.9);
+    box-shadow:0 0 20px rgba(53,242,255,.35), inset 0 0 14px rgba(53,242,255,.12), 4px 4px 0 rgba(255,95,162,.55);
+    animation:tapPulse 1.7s ease-in-out infinite; }
+  #overlay .tap:active { transform:translate(2px,2px);
+    box-shadow:0 0 20px rgba(53,242,255,.35), inset 0 0 14px rgba(53,242,255,.12), 2px 2px 0 rgba(255,95,162,.55); }
+  @keyframes tapPulse { 0%,100% { opacity:1; } 50% { opacity:.6; } }
+  #menu-foot { position:relative; z-index:2; margin-top:14px; font-size:9px; letter-spacing:.24em;
+    text-indent:.24em; opacity:.45; }
   #err { position:fixed; z-index:99; left:8px; bottom:8px; max-width:90vw; font-size:10px; color:#ff8080;
     background:rgba(0,0,0,.7); padding:6px 8px; border-radius:6px; display:none; white-space:pre-wrap; }
 </style>
@@ -76,14 +133,21 @@
 
 <div id="btn-nitro">NITRO</div>
 
+<button id="btn-pause" aria-label="Pause">&#10074;&#10074;</button>
+<div id="paused-pill">PAUSED</div>
+
 <div id="overlay">
+  <div id="menu-sun" aria-hidden="true"></div>
+  <div id="menu-grid" aria-hidden="true"></div>
   <h1>TOKYO DRIFT 3D</h1>
-  <p>NEON NIGHT &mdash; Milestone 3 &mdash; 3 laps, closed circuit</p>
+  <div id="menu-jp">東京ドリフト</div>
+  <div id="menu-tag">NEON NIGHT &mdash; 3 LAPS &mdash; CLOSED CIRCUIT</div>
   <p>Hold LEFT / RIGHT half of the screen to steer &mdash; the car accelerates on its own.<br>
   TAP NITRO (or Space) to burn the whole meter &mdash; grab glowing bottles on the road to refill.<br>
   Cross into oncoming lanes to dodge traffic.<br>
-  Keyboard: &#9664; &#9654; / A D to steer, Space / Shift for nitro.</p>
+  Keyboard: &#9664; &#9654; / A D to steer &middot; Space / Shift nitro &middot; P pause.</p>
   <button class="tap" id="btn-start">TAP TO START</button>
+  <div id="menu-foot">CSS-ONLY RETRO ART &mdash; NO DESIGNER ASSETS</div>
 </div>
 <div id="err"></div>
 
