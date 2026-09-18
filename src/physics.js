@@ -111,6 +111,9 @@ export async function createPhysics(RAPIER, track) {
     s: CFG.spawnS, lat: CFG.spawnLat,
     speed: 0, heading: 0, // heading = absolute world yaw (rad)
     steerVis: 0, nitro: 1, nitroBurning: false,
+    steerHold: 0, // 0..1 progressive-steering ramp: authority grows the
+                  // longer a steer input is held (ramps up over ~0.9 s,
+                  // decays fast on release)
     ghostT: 0, respawns: 0, lastGoodS: CFG.spawnS, dbgY: undefined,
     lap: 1, raceT: 0, lapStartT: 0, lastLapT: null, bestLapT: null,
     raceDone: false, pickups: 0,
@@ -197,7 +200,14 @@ export async function createPhysics(RAPIER, track) {
   // after respawns). Velocity follows the heading so contacts resolve.
   function placeBody() {
     track.frameAt(arcade.s, _f);
-    chassis.setTranslation({ x: arcade.x, y: _f.pos.y + ch.y, z: arcade.z }, true);
+    // Exact surface height: dense elevation table + banked lateral term.
+    // The old _f.pos.y alone (coarse, unbanked) put the car under the
+    // road on bumps and banked crests.
+    chassis.setTranslation({
+      x: arcade.x,
+      y: track.groundYAt(arcade.s, arcade.lat) + ch.y,
+      z: arcade.z
+    }, true);
     chassis.setRotation(yawQuat(arcade.heading), true);
     chassis.setLinvel({
       x: Math.sin(arcade.heading) * arcade.speed,
@@ -210,6 +220,10 @@ export async function createPhysics(RAPIER, track) {
   const _est = {};
   function estimateTrack() {
     nearestTrackPoint(track, arcade.x, arcade.z, _est);
+    // Diagnostic: s-estimate jumps (wrong-leg matches at switchbacks).
+    const ds = Math.abs(track.distAhead(dbg.lastS, _est.s));
+    if (ds > 60 && ds < track.length - 60) dbg.sJumps++;
+    dbg.lastS = _est.s;
     arcade.s = _est.s;
     arcade.lat = _est.lat;
     if (isFinite(_est.s) && Math.abs(_est.lat) <= CFG.maxLat) arcade.lastGoodS = _est.s;
@@ -217,23 +231,33 @@ export async function createPhysics(RAPIER, track) {
   }
 
   // Guard-rail plane: continuous check, so no tunneling at any speed.
-  // The clamp cancels the outward displacement every step (that IS the
-  // lateral reflection — the car can never cross the plane). The heading
+  // The clamp cancels ONLY the outward lateral displacement — the
+  // along-track component of the car's motion is preserved, so the car
+  // SLIDES along the rail instead of being pinned to a fixed world point
+  // (the old full re-snap froze the s-estimate while grinding, which felt
+  // like an invisible hand dragging the car along the curb). The heading
   // is NEVER touched here: a rail hit must not spin or yank the car
   // (M6). Fresh hits scrub speed x0.82 and spark; sustained grinding
   // costs speed continuously instead of compounding the hit scrub.
   let stepCount = 0, lastDt = CFG.fixedDt;
   let lastBounceStep = -1e9, lastRailSparkStep = -1, railBounceStep = -1;
+  // Diagnostics (read-only counters for the harness; never affect sim).
+  const dbg = { railSnaps: 0, sJumps: 0, lastS: CFG.spawnS };
   function railPlaneCheck(est) {
     const over = Math.abs(arcade.lat) - CFG.maxLat;
     if (!(over > 0)) return; // also false when lat is NaN
+    dbg.railSnaps++;
     const side = Math.sign(arcade.lat) || 1;
     const rel = wrapAngle(arcade.heading - est.yaw);
     const outward = Math.sin(rel) * side; // > 0: still driving into the rail
     track.frameAt(arcade.s, _f);
+    // Decompose (car - centerline) into tangent + lateral parts; clamp
+    // only the lateral part. Forward slide along the rail is preserved.
+    const dx = arcade.x - _f.pos.x, dz = arcade.z - _f.pos.z;
+    const tComp = dx * _f.tan.x + dz * _f.tan.z;
     arcade.lat = side * CFG.maxLat;
-    arcade.x = _f.pos.x + _f.lat.x * arcade.lat;
-    arcade.z = _f.pos.z + _f.lat.z * arcade.lat;
+    arcade.x = _f.pos.x + _f.lat.x * arcade.lat + _f.tan.x * tComp;
+    arcade.z = _f.pos.z + _f.lat.z * arcade.lat + _f.tan.z * tComp;
     if (outward > 0) {
       if (stepCount - lastBounceStep > 30) {
         arcade.speed *= 0.82; // fresh hit
@@ -369,6 +393,12 @@ export async function createPhysics(RAPIER, track) {
     // the car drives straight along its own heading — road curvature has
     // no influence whatsoever.
     const steerIn = ((input.left ? 1 : 0) - (input.right ? 1 : 0));
+    // Progressive steering: authority ramps UP the longer the input is
+    // held (Craig: "steering should scale up the longer I hold"). A fresh
+    // tap gives 35% authority; a full ~0.9 s hold gives 100%.
+    if (steerIn !== 0) a.steerHold = Math.min(1, a.steerHold + dt / 0.9);
+    else a.steerHold = Math.max(0, a.steerHold - dt / 0.25);
+    const steerRamp = 0.35 + 0.65 * a.steerHold;
     if (a.speed > 0.5 && steerIn !== 0) {
       track.frameAt(a.s, _f);
       let lx = _f.lat.x, lz = _f.lat.z;
@@ -378,7 +408,7 @@ export async function createPhysics(RAPIER, track) {
       const fx = Math.sin(a.heading), fz = Math.cos(a.heading);
       const turnSign = (fz * sx - fx * sz) >= 0 ? 1 : -1;
       const t = Math.min(a.speed / CFG.maxSpeed, 1);
-      const yawRate = CFG.steerYawLow + (CFG.steerYawHigh - CFG.steerYawLow) * t;
+      const yawRate = (CFG.steerYawLow + (CFG.steerYawHigh - CFG.steerYawLow) * t) * steerRamp;
       a.heading += steerIn * turnSign * yawRate * dt;
     }
     // Attract-mode assist (one-shot flag set by autopilot.js each update):
@@ -440,7 +470,7 @@ export async function createPhysics(RAPIER, track) {
       track.frameAt(rivalSt.s, _f);
       rival.setTranslation({
         x: _f.pos.x + _f.lat.x * rivalSt.lane,
-        y: _f.pos.y + _f.lat.y * rivalSt.lane + ch.y,
+        y: track.groundYAt(rivalSt.s, rivalSt.lane) + ch.y,
         z: _f.pos.z + _f.lat.z * rivalSt.lane,
       }, true);
       rival.setRotation(yawQuat(_f.yaw), true);
@@ -466,7 +496,7 @@ export async function createPhysics(RAPIER, track) {
       track.frameAt(car.s, _f);
       car.body.setTranslation({
         x: _f.pos.x + _f.lat.x * car.lane,
-        y: _f.pos.y + _f.lat.y * car.lane + 0.35,
+        y: track.groundYAt(car.s, car.lane) + 0.35,
         z: _f.pos.z + _f.lat.z * car.lane,
       }, true);
       car.body.setRotation(yawQuat(_f.yaw + (car.kind === 'same' ? 0 : Math.PI)), true);
@@ -549,12 +579,14 @@ export async function createPhysics(RAPIER, track) {
     arcade.heading = _f.yaw;
     arcade.speed = 0;
     arcade.steerVis = 0;
+    arcade.steerHold = 0; // steering ramp restarts after a reposition
     // NOTE: teleport preserves the nitro meter (M4 contract) — only
     // reset() refills it. The burn is cancelled by the reposition.
     arcade.nitroBurning = false;
     arcade.ghostT = 0;
     arcade.dbgY = undefined;
     arcade.lastGoodS = s;
+    dbg.lastS = s; // keep the s-jump diagnostic honest across teleports
     placeBody();
     chassis.setLinvel({ x: 0, y: 0, z: 0 }, true);
     rivalSt.s = (s + 40) % L;
@@ -600,6 +632,8 @@ export async function createPhysics(RAPIER, track) {
     arcade, bottles, track, addStaticBox, onContact, step, stepN, reset, teleportS,
     playerSpeed: () => arcade.speed,
     rawEvents: () => rawEventCount,
+    // Harness diagnostics: rail-snap activations and s-estimate jumps.
+    dbgCounters: () => ({ railSnaps: dbg.railSnaps, sJumps: dbg.sJumps }),
     // World-agent contract for rail colliders: build one static cuboid per
     // side per segment with center = track.toWorld(s + seg/2, ±railLat,
     // railHeight/2), half-extents = (railThick, railHeight/2, seg/2 + 0.4),

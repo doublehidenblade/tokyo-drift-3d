@@ -85,6 +85,40 @@ export class TrackV2 {
       w: bx1 - bx0, d: bz1 - bz0,
       y: PLAN.bay.surface_y, yaw: 0,
     };
+
+    // Dense road-elevation table (2x the physics sample rate — the same
+    // tessellation the visual road mesh uses in city_v2.js). The car's Y
+    // must come from this table, not from coarse frameAt interpolation:
+    // on sharp crests the coarse curve cuts below the rendered road and
+    // the car visibly sinks under the surface.
+    const _mk = () => ({ pos: new THREE.Vector3(), tan: new THREE.Vector3(), lat: new THREE.Vector3(), yaw: 0 });
+    const M = N * 2, yDense = new Float64Array(M), tf = _mk();
+    for (let i = 0; i < M; i++) {
+      this.frameAt((i / M) * this.length, tf);
+      yDense[i] = tf.pos.y;
+    }
+    this._yDense = yDense;
+    this._gy = _mk();
+  }
+
+  /** Linear-interpolated centerline elevation from the dense table. */
+  roadYAt(s) {
+    const T = this._yDense, n = T.length;
+    const x = ((((s % this.length) + this.length) % this.length) / this.length) * n;
+    const i0 = Math.floor(x), t = x - i0;
+    return T[i0 % n] * (1 - t) + T[(i0 + 1) % n] * t;
+  }
+
+  /**
+   * Exact road-surface height at (s, lat): dense centerline elevation
+   * plus the banked lateral vector's vertical component. This is what the
+   * visual road mesh renders, so physics must use it for the car body,
+   * traffic, and rivals — the old code ignored the banked term and used
+   * the coarse elevation, which put the car under the road on bumps.
+   */
+  groundYAt(s, lat) {
+    this.frameAt(s, this._gy);
+    return this.roadYAt(s) + this._gy.lat.y * lat;
   }
 
   // Chainage (meters) of sample i — the respawn.js contract uses this

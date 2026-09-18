@@ -12,15 +12,17 @@
 import * as THREE from 'three';
 import { GLTFLoader } from '../vendor/GLTFLoader.js';
 
-export const CAR_W = 2.8;
-export const CAR_L = 5.6;
+export const CAR_W = 2.2;
+export const CAR_L = 4.6;
 // Uniform bake scale applied to the Kenney models (authored ~1.2 x 2.6 m).
-// 2.0 -> race car is 2.4 m wide, 5.1 m long, 1.86 m tall.
-export const MODEL_SCALE = 2.0;
+// 1.73 -> race car is 2.08 m wide, 4.41 m long, 1.61 m tall: reads as a
+// real ~4.4 m car next to the Blender buildings (the old 2.0 made cars
+// look bigger than the shophouses).
+export const MODEL_SCALE = 1.73;
 // race.glb wheel node translations x MODEL_SCALE, front pair first
 // (main.js steers indices 0,1). Recomputed from the template at preload.
-export let WHEEL_SPOTS = [[0.7, 1.28], [-0.7, 1.28], [0.7, -1.76], [-0.7, -1.76]];
-export let WHEEL_RADIUS = 0.6;
+export let WHEEL_SPOTS = [[0.61, 1.11], [-0.61, 1.11], [0.61, -1.52], [-0.61, -1.52]];
+export let WHEEL_RADIUS = 0.52;
 
 const MODEL_FILES = {
   race: 'race.glb',
@@ -303,7 +305,18 @@ export function buildCarMesh(bodyColor, assetLabel) {
 
   g.userData.wheels = wheels;
   g.userData.spot = spot;
+  _headlightRig.push({ coneMat, spot });
   return g;
+}
+
+// Day/night control for the headlight rigs (cones + spotlights): bright at
+// night, nearly invisible by day. Called from main.js setDayNight.
+const _headlightRig = [];
+export function setHeadlightsDay(day) {
+  for (const r of _headlightRig) {
+    r.coneMat.opacity = day ? 0.02 : 0.10;
+    r.spot.intensity = day ? 150 : 1400;
+  }
 }
 
 // Traffic car visual: a tinted (or native-color, when colorHex is null)

@@ -15,7 +15,7 @@ export const CFG = {
   // M6 heading-based steering: absolute world-yaw rate, falls with speed
   // (no high-speed donuts, generous low-speed authority for hairpins).
   steerYawLow: 1.4,       // yaw rate (rad/s) near standstill
-  steerYawHigh: 0.42,     // yaw rate (rad/s) at maxSpeed
+  steerYawHigh: 0.55,     // yaw rate (rad/s) at maxSpeed (0.42 was too weak to hold fast corners)
   maxSpeed: 60,           // m/s (~216 km/h)
   nitroMaxSpeed: 75,      // m/s (~270 km/h)
   nitroBurnRate: 0.5,     // meter fraction per second while burning (full burn ~2 s)

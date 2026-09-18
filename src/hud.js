@@ -55,6 +55,20 @@ export function setPausedUI(paused) {
   if (el.pausePill) el.pausePill.classList.toggle('show', !!paused);
 }
 
+// Day/Night toggle (top-left). pointerdown for touch, same as pause.
+export function bindDayNightButtons(onMode) {
+  const bd = document.getElementById('btn-day');
+  const bn = document.getElementById('btn-night');
+  if (bd) bd.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); onMode('day'); });
+  if (bn) bn.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); onMode('night'); });
+  setDayNightVisible(false); // boot lands on the menu; appear on START
+}
+
+export function setDayNightVisible(v) {
+  const d = document.getElementById('daynight');
+  if (d) d.style.display = v ? 'flex' : 'none';
+}
+
 // The button lives under the menu overlay (z-30 < z-50) but the retro menu
 // is translucent up top, so hide it outright while the menu is shown.
 export function setPauseVisible(v) {

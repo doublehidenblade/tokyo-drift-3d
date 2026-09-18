@@ -185,6 +185,14 @@ export class Track {
     return out;
   }
 
+  // Road-surface height at (s, lat): centerline elevation plus the
+  // banked lateral vector's vertical component. Same contract as
+  // track_v2.js groundYAt so physics works on either world.
+  groundYAt(s, lat) {
+    const f = this.frameAt(s);
+    return f.pos.y + f.lat.y * lat;
+  }
+
   // Signed wrap-aware distance from sA to sB along the lap (+ = ahead).
   distAhead(sA, sB) {
     let d = (sB - sA) % this.length;

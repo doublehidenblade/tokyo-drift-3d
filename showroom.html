@@ -19,7 +19,6 @@
   .viewer-wrap { position:relative; background:#05070a; border:1px solid var(--edge); border-radius:12px; overflow:hidden; }
   #viewer { display:block; width:100%; height:62vh; min-height:380px; cursor:grab; touch-action:none; }
   #viewer:active { cursor:grabbing; }
-  #toyframe { display:none; width:100%; height:62vh; min-height:380px; border:0; }
   #loading { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:14px; pointer-events:none; }
   .controls { display:flex; align-items:center; gap:10px; margin-top:14px; flex-wrap:wrap; }
   .controls button.nav { background:var(--card); color:var(--text); border:1px solid var(--edge); border-radius:8px; padding:9px 16px; font-size:14px; cursor:pointer; }
@@ -41,7 +40,6 @@
   <div class="tabs" id="tabs"></div>
   <div class="viewer-wrap">
     <canvas id="viewer"></canvas>
-    <iframe id="toyframe" title="Toy scene"></iframe>
     <div id="loading">loading model&hellip;</div>
   </div>
   <div class="controls" id="controls">
@@ -52,7 +50,7 @@
     <span class="hint">drag to orbit &middot; scroll to zoom</span>
   </div>
   <div id="status"></div>
-  <p class="foot">One viewer, lazy per-model loading. The toy scene is a hand-assembled diorama (separate page: <a href="toy-scene.html">toy-scene.html</a>).</p>
+  <p class="foot">One viewer, lazy per-model loading.</p>
 </main>
 
 <script type="module">
@@ -88,7 +86,6 @@ const CATEGORIES = [
     ['light-post','lightPostLarge.glb'],['flag-checkers','flagCheckers.glb'],
     ['pylon','pylon.glb'],['overhead-gantry','overhead.glb'],
     ['billboard','billboard.glb'],['grandstand','grandStand.glb']]},
-  { id:'toy', title:'\u2605 Toy scene', iframe:'toy-scene.html' },
 ];
 
 const loader = new GLTFLoader();
@@ -134,7 +131,6 @@ const picker = document.getElementById('picker');
 const modelname = document.getElementById('modelname');
 const statusEl = document.getElementById('status');
 const loadingEl = document.getElementById('loading');
-const frame = document.getElementById('toyframe');
 const controlsEl = document.getElementById('controls');
 
 let activeCat = 0, activeIdx = 0, currentGroup = null;
@@ -150,7 +146,6 @@ function clearModel(){
 
 function showModel(catIdx, idx){
   const cat = CATEGORIES[catIdx];
-  if (cat.iframe) return;
   activeCat = catIdx; activeIdx = ((idx % cat.models.length)+cat.models.length)%cat.models.length;
   const [name, file] = cat.models[activeIdx];
   const url = `showroom/models/${cat.id}/${file}`;
@@ -191,19 +186,10 @@ function selectTab(i){
   activeCat = i;
   [...tabsEl.children].forEach((b,j)=>b.classList.toggle('active', j===i));
   const cat = CATEGORIES[i];
-  if (cat.iframe){
-    canvas.style.display='none'; loadingEl.style.display='none';
-    frame.style.display='block'; frame.src = cat.iframe;
-    controlsEl.style.display='none';
-    modelname.textContent=''; setStatus('toy scene diorama — assembled from the curated Kenney models');
-    window.__api.state = { cat:'toy', loaded:true, error:null };
-  } else {
-    frame.style.display='none'; frame.removeAttribute('src');
-    canvas.style.display='block'; controlsEl.style.display='flex';
-    picker.innerHTML = cat.models.map(([n],k)=>`<option value="${k}">${n}</option>`).join('');
-    sizeRenderer();
-    showModel(i, 0);
-  }
+  canvas.style.display='block'; controlsEl.style.display='flex';
+  picker.innerHTML = cat.models.map(([n],k)=>`<option value="${k}">${n}</option>`).join('');
+  sizeRenderer();
+  showModel(i, 0);
 }
 
 // build tabs
@@ -232,7 +218,7 @@ function loop(){
 
 // test hook
 window.__api = {
-  categories: CATEGORIES.map(c=>({id:c.id, title:c.title, count:(c.models||[]).length, iframe:!!c.iframe})),
+  categories: CATEGORIES.map(c=>({id:c.id, title:c.title, count:c.models.length})),
   selectTab, showModel, errors,
   state: { cat:null, idx:0, name:null, loaded:false, error:null },
 };

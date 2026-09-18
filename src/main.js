@@ -6,10 +6,10 @@ import { CFG } from './config.js';
 import { createPhysics } from './physics.js';
 // NOTE: Track / buildCity are loaded dynamically in boot() — ?world=classic
 // loads the M6 track/city, anything else (default) loads the v2 plan world.
-import { buildCarMesh, WHEEL_SPOTS, WHEEL_RADIUS, preloadCarModels } from './car.js';
+import { buildCarMesh, WHEEL_SPOTS, WHEEL_RADIUS, preloadCarModels, setHeadlightsDay } from './car.js';
 import { Sparks } from './sparks.js';
 import { input, bindInput, setInput, pulseNitro } from './input.js';
-import { bindHud, updateHud, bindPauseButton, setPausedUI, setPauseVisible } from './hud.js';
+import { bindHud, updateHud, bindPauseButton, setPausedUI, setPauseVisible, bindDayNightButtons, setDayNightVisible } from './hud.js';
 import { createInspector } from './inspector.js';
 
 const errors = [];
@@ -82,7 +82,7 @@ async function boot() {
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 2000);
 
-  city = buildCity(scene, physics, track);
+  city = await buildCity(scene, physics, track); // async: loads Blender GLBs
   sparks = new Sparks(scene);
   physics.onContact((kind, x, y, z) => {
     sparkCount++;
@@ -107,18 +107,21 @@ async function boot() {
   document.getElementById('btn-inspect').addEventListener('click', () => {
     togglePause(true);
     setPauseVisible(false);
+    setDayNightVisible(false);
     document.getElementById('overlay').style.display = 'none';
     inspector.open('assets');
   });
   inspector.onClose = () => {
     togglePause(false);
     setPauseVisible(false);
+    setDayNightVisible(false);
     document.getElementById('overlay').style.display = 'flex';
   };
 
   bindInput();
   bindHud();
   bindPauseButton(() => togglePause());
+  bindDayNightButtons((mode) => window.__td3.setDayNight(mode));
   window.addEventListener('keydown', (e) => {
     if (inspector && inspector.isOpen() && e.code === 'Escape') { e.preventDefault(); inspector.close(); return; }
     if (e.code === 'KeyP' || e.code === 'Escape') { e.preventDefault(); togglePause(); }
@@ -139,6 +142,17 @@ async function boot() {
     ready: true,
     start: resetGame,
     reset: resetGame,
+    // Day/night lighting: 'day' | 'night' (world boots at night).
+    dayNight: 'night',
+    setDayNight: (mode) => {
+      const m = mode === 'day' ? 'day' : 'night';
+      window.__td3.dayNight = m;
+      if (city && typeof city.setDayNight === 'function') city.setDayNight(m);
+      setHeadlightsDay(m === 'day'); // dim cones + spotlight by day
+      document.getElementById('btn-day')?.classList.toggle('on', m === 'day');
+      document.getElementById('btn-night')?.classList.toggle('on', m === 'night');
+      return m;
+    },
     // Harness: place the car in track space.
     teleportS: (s, lat, keepTraffic) => {
       physics.teleportS(s, lat, keepTraffic);
@@ -148,6 +162,7 @@ async function boot() {
       state = 'playing';
       togglePause(false);
       setPauseVisible(true);
+      setDayNightVisible(true);
       document.getElementById('overlay').style.display = 'none';
       // Snap the chase camera to the new position so harness screenshots and
       // luma samples see the settled view, not a mid-flight transit.
@@ -232,6 +247,8 @@ async function boot() {
         x: +t.x.toFixed(1), y: +t.y.toFixed(1), z: +t.z.toFixed(1),
         yaw: +a.heading.toFixed(3),
         heading: +a.heading.toFixed(3),
+        steerHold: +a.steerHold.toFixed(3),
+        dayNight: window.__td3.dayNight,
         rivalS: +physics.rivalSt.s.toFixed(1),
         traffic: physics.traffic.map((c) => ({ kind: c.kind, s: +c.s.toFixed(0), lane: c.lane })),
         sparks: sparkCount,
@@ -258,7 +275,40 @@ async function boot() {
     debug: () => ({
       s: physics.arcade.s, lat: physics.arcade.lat,
       speed: physics.arcade.speed, nitro: physics.arcade.nitro,
+      railSnaps: physics.dbgCounters().railSnaps,
+      sJumps: physics.dbgCounters().sJumps,
+      // Ground-clearance telemetry: body Y vs exact surface Y.
+      bodyY: physics.chassis.translation().y,
+      groundY: track.groundYAt(physics.arcade.s, physics.arcade.lat),
     }),
+    // Mean screen luma 0..1 (downsampled): the "is night too dark" probe.
+    luma: () => {
+      const cv = document.querySelector('#game canvas');
+      if (!cv) return -1;
+      const c = document.createElement('canvas'); c.width = 64; c.height = 36;
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.drawImage(cv, 0, 0, 64, 36);
+      const d = g.getImageData(0, 0, 64, 36).data;
+      let sum = 0;
+      for (let i = 0; i < d.length; i += 4) sum += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+      return +((sum / (d.length / 4)) / 255).toFixed(3);
+    },
+    // City stats for the inspection harness (Blender model/instance counts).
+    cityStats: () => (city && typeof city.getStats === 'function' ? city.getStats() : null),
+    // Snap the chase camera behind the car instantly (harness screenshots).
+    // Replicates updateCamera() exactly, with k=1.
+    snapCamera: () => {
+      const t = physics.chassis.translation();
+      track.frameAt(physics.arcade.s, _f);
+      camera.position.set(
+        t.x - _f.tan.x * 10.5 + _f.up.x * 4.6,
+        t.y - _f.tan.y * 10.5 + _f.up.y * 4.6,
+        t.z - _f.tan.z * 10.5 + _f.up.z * 4.6
+      );
+      _camLook.set(t.x + _f.tan.x * 8, t.y + 1.9, t.z + _f.tan.z * 8);
+      camera.lookAt(_camLook);
+      return true;
+    },
     // M4 screen-space steering proof: NDC of the player car center.
     carNDC: () => {
       camera.updateMatrixWorld();
@@ -291,6 +341,7 @@ async function boot() {
       state = 'playing';
       togglePause(false);
       setPauseVisible(true);
+      setDayNightVisible(true);
       document.getElementById('overlay').style.display = 'none';
       const a = physics.arcade;
       track.frameAt(a.s, _f);
@@ -426,6 +477,7 @@ function resetGame() {
   state = 'playing';
   togglePause(false); // TAP TO START / __td3.start() always resumes + yields attract mode
   setPauseVisible(true);
+  setDayNightVisible(true);
   document.getElementById('overlay').style.display = 'none';
 }
 

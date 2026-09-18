@@ -1,19 +1,23 @@
 // Tokyo Drift 3D — buildCityV2: the v2 plan-driven world (LAYOUT review).
 //
 // Procedural massing + road truth from city_plan_v2.json — NOT final art.
+// Async: awaits the Blender GLB bake (src/blender_assets.js) before the
+// city object resolves, so main.js (`city = await buildCity(...)`) and the
+// harness see a fully dressed world at boot.
 // Returns the same API as buildCity (src/city.js):
 //   { update(dt, elapsed, bottles), syncTraffic(traffic), setTunnelGlow(f),
-//     buildingsNear(s, range), trafficFade() }
+//     buildingsNear(s, range), trafficFade(), setDayNight(mode), getStats() }
 // so main.js / physics.js / the harness work unchanged.
 import * as THREE from 'three';
 import { PLAN } from './plan_v2.js';
 import { CFG } from './config.js';
 import { mulberry32, makeGantryTexture, makeStartLineTexture } from './textures.js';
 import { buildTrafficCarMesh } from './car.js';
+import { buildBlenderAssets } from './blender_assets.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 
-export function buildCityV2(scene, physics, track) {
+export async function buildCityV2(scene, physics, track) {
   const L = track.length;
   const TUN = track.tunnel, BR = track.bridge;
   const BAY = {
@@ -113,17 +117,27 @@ export function buildCityV2(scene, physics, track) {
   };
 
   // ------------------------------------------------------------ atmosphere
-  scene.add(new THREE.HemisphereLight(0x2e4a6e, 0x05060a, 0.85));
+  // Light handles are captured for setDayNight() (day/night city API).
+  const hemi = new THREE.HemisphereLight(0x2e4a6e, 0x05060a, 0.85);
+  scene.add(hemi);
   const dir = new THREE.DirectionalLight(0x8fb4ff, 0.45);
   dir.position.set(-300, 500, 200);
   scene.add(dir);
-  scene.add(new THREE.AmbientLight(0x223355, 0.35));
+  const amb = new THREE.AmbientLight(0x223355, 0.35);
+  scene.add(amb);
   scene.background = new THREE.Color(0x070a18);
   scene.fog = new THREE.FogExp2(0x0d1233, 0.0011);
   // Tunnel fill (driven by main.js via setTunnelGlow); the tube ALSO has
   // always-on strip + point lights so sweeps never see black.
   const tunnelAmbient = new THREE.AmbientLight(0xaac4ff, 0);
   scene.add(tunnelAmbient);
+
+  // ------------------------------------------------- Blender asset pack
+  // Manifest-driven GLB dressing (bt- namespace): deterministic placements
+  // computed synchronously, GLB bake streams in async behind the handle.
+  // The world boots with procedural massing; Blender buildings/props pop
+  // in as each model finishes. See src/blender_assets.js.
+  const blender = buildBlenderAssets(scene, track);
 
   // ---------------------------------------------------------------- ground
   {
@@ -150,12 +164,14 @@ export function buildCityV2(scene, physics, track) {
 
   // ------------------------------------------------------------------ road
   // Dark asphalt ribbon at the REAL plan elevations. One draw call.
+  // roadMat is function-scoped: setDayNight() brightens it at night.
+  let roadMat = null;
   {
     const SEG = track.N * 2, segLen = L / SEG;
     const sList = [];
     for (let k = 0; k < SEG; k++) sList.push(k * segLen);
-    const road = ribbon(sList, [[-12, 0.02], [12, 0.02]], 'up',
-      std(0x232833, { roughness: 0.6, metalness: 0.2, envMapIntensity: 0.6 }), true);
+    roadMat = std(0x232833, { roughness: 0.6, metalness: 0.2, envMapIntensity: 0.6 });
+    const road = ribbon(sList, [[-12, 0.02], [12, 0.02]], 'up', roadMat, true);
     label(road, 'v2-road');
     scene.add(road);
     // Edge lines (emissive-ish white strips, read at night).
@@ -439,10 +455,11 @@ export function buildCityV2(scene, physics, track) {
           const x = gx + (rnd() - 0.5) * 14, z = gz + (rnd() - 0.5) * 14;
           if (inBay(x, z, 8)) continue;
           const w = 16 + rnd() * 14, dep = 16 + rnd() * 14;
-          // B3: every footprint corner stays >= 16 m from the centerline.
-          // (Center-based test alone lets 30 m-wide faces reach ~5 m from
-          // the racing line — the chase camera at 10.5 m would clip inside.)
-          if (trackDist(x, z) < 16 + Math.hypot(w, dep) / 2) continue;
+          // B3: every footprint corner stays >= 60 m from the centerline.
+          // (Blender buildings own the near field now — this instanced box
+          // massing is background skyline only, so near-field boxes must
+          // not double up with the GLB buildings.)
+          if (trackDist(x, z) < 60 + Math.hypot(w, dep) / 2) continue;
           const h = Math.max(8, Math.min(60, hMin + rnd() * (hMax - hMin)));
           placements.push({ x, z, w, d: dep, h, color: d.color, yaw: (rnd() - 0.5) * 0.2, pad: padY[di] || 0 });
         }
@@ -468,13 +485,66 @@ export function buildCityV2(scene, physics, track) {
     bIM.instanceColor.needsUpdate = true;
     scene.add(bIM);
     // district ground pads (tinted, sit on the big ground)
+    // The pads are flat, but the road dips (tunnel cutting) and rises
+    // (bridge). Where the road drops below a pad, the pad would become a
+    // lid over the road and hide the car — so each pad is subdivided and
+    // its vertices near the road conform down to just under the road
+    // surface, carving a natural cutting with feathered sides.
+    const _roadHash = new Map();
+    const _HCELL = 16;
+    {
+      const step = 4, n = Math.ceil(track.length / step);
+      for (let k = 0; k < n; k++) {
+        const s = (k / n) * track.length;
+        track.frameAt(s, _f);
+        const key = `${Math.floor(_f.pos.x / _HCELL)},${Math.floor(_f.pos.z / _HCELL)}`;
+        let arr = _roadHash.get(key);
+        if (!arr) { arr = []; _roadHash.set(key, arr); }
+        arr.push({ x: _f.pos.x, z: _f.pos.z, s });
+      }
+    }
+    function roadNear(x, z) {
+      const cx = Math.floor(x / _HCELL), cz = Math.floor(z / _HCELL);
+      let bs = -1, bd = 26 * 26;
+      for (let ix = cx - 1; ix <= cx + 1; ix++) for (let iz = cz - 1; iz <= cz + 1; iz++) {
+        const arr = _roadHash.get(`${ix},${iz}`);
+        if (!arr) continue;
+        for (let i = 0; i < arr.length; i++) {
+          const p = arr[i];
+          const dx = x - p.x, dz = z - p.z, d2 = dx * dx + dz * dz;
+          if (d2 < bd) { bd = d2; bs = p.s; }
+        }
+      }
+      return bs; // nearest centerline s within 26 m, or -1
+    }
     PLAN.districts.forEach((d, di) => {
       if (d.heights_m[1] <= 0) return;
       const [x0, x1, z0, z1] = d.rect;
-      const g = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0),
-        std(new THREE.Color(d.color).multiplyScalar(0.16), { roughness: 1 }));
-      g.geometry.rotateX(-Math.PI / 2);
-      g.position.set((x0 + x1) / 2, (padY[di] || 0) - 0.05, (z0 + z1) / 2);
+      const baseY = (padY[di] || 0) - 0.05;
+      const seg = 4; // ~4 m vertex spacing for the cutting carve
+      const nx = Math.max(1, Math.round((x1 - x0) / seg));
+      const nz = Math.max(1, Math.round((z1 - z0) / seg));
+      const pg = new THREE.PlaneGeometry(x1 - x0, z1 - z0, nx, nz);
+      pg.rotateX(-Math.PI / 2);
+      const pp = pg.attributes.position;
+      for (let vi = 0; vi < pp.count; vi++) {
+        const vx = pp.getX(vi) + (x0 + x1) / 2;
+        const vz = pp.getZ(vi) + (z0 + z1) / 2;
+        const s = roadNear(vx, vz);
+        if (s < 0) continue;
+        track.frameAt(s, _f);
+        const lat = (vx - _f.pos.x) * _f.lat.x + (vz - _f.pos.z) * _f.lat.z;
+        const a = Math.abs(lat);
+        if (a > 24) continue;
+        const roadY = track.groundYAt(s, Math.max(-12, Math.min(12, lat)));
+        const target = roadY - 0.07;
+        if (target >= baseY) continue;
+        const t = a <= 14 ? 1 : 1 - (a - 14) / 10; // feathered cutting walls
+        pp.setY(vi, (target - baseY) * t); // local Y; mesh sits at baseY
+      }
+      pg.computeVertexNormals();
+      const g = new THREE.Mesh(pg, std(new THREE.Color(d.color).multiplyScalar(0.16), { roughness: 1 }));
+      g.position.set((x0 + x1) / 2, baseY, (z0 + z1) / 2);
       label(g, 'v2-district-pad');
       scene.add(g);
     });
@@ -662,5 +732,65 @@ export function buildCityV2(scene, physics, track) {
     }
   }
 
-  return { update, syncTraffic, setTunnelGlow, buildingsNear, trafficFade };
+  // ------------------------------------------------- day/night city API
+  // mode 'day' | 'night' (default boot: 'night'). Adjusts the lights this
+  // module already owns + background/fog; the Blender handle dims the
+  // baked glow materials (windows shouldn't glow at noon); tunnel
+  // interior lights stay ON in both modes. Safe to call before the GLB
+  // bake finishes — the glow factor applies when baking completes.
+  let dayNightMode = 'night';
+  function setDayNight(mode) {
+    dayNightMode = mode === 'day' ? 'day' : 'night';
+    if (dayNightMode === 'day') {
+      hemi.intensity = 1.7; hemi.color.set(0xfff1dc); hemi.groundColor.set(0x7a6f5c);
+      amb.intensity = 0.7; amb.color.set(0xfff4e6);
+      dir.intensity = 1.9; dir.color.set(0xfff3e0); dir.position.set(420, 620, 180);
+      scene.background.set(0x9fc8ec);
+      scene.fog.color.set(0xbcd2ea);
+      if (roadMat) roadMat.color.set(0x232833);
+    } else {
+      hemi.intensity = 1.15; hemi.color.set(0x2e4a6e); hemi.groundColor.set(0x05060a);
+      amb.intensity = 0.55; amb.color.set(0x223355);
+      dir.intensity = 0.55; dir.color.set(0x8fb4ff); dir.position.set(-300, 500, 200);
+      scene.background.set(0x070a18);
+      scene.fog.color.set(0x0d1233);
+      if (roadMat) roadMat.color.set(0x2b3242); // slightly brightened at night
+    }
+    blender.setGlowMode(dayNightMode === 'day' ? 0.12 : 1.0);
+  }
+  setDayNight('night'); // default boot mode
+
+  // main.js awaits buildCity: the Blender GLB bake finishes before the
+  // city object resolves, so boot/harness screenshots see the full world.
+  await blender.ready;
+
+  // Asset stats for the harness (parent wires window.__td3.cityStats()
+  // to this). Placement counts from the Blender pack fill in as GLBs
+  // finish baking; safe to call at any time.
+  function getStats() {
+    const c = blender.counts;
+    const models = Object.keys(c).filter((k) => k !== 'proc-traffic-light');
+    const isBldg = (k) => /tower|midrise|shophouse|corner-building/.test(k);
+    return {
+      blenderModels: models.length,                       // distinct GLB models placed
+      blenderInstances: models.reduce((a, k) => a + c[k], 0), // total placed instances
+      trafficLights: c['proc-traffic-light'] || 0,        // procedural signal masts
+      lamps: c['bt-lamp-post'] || 0,
+      buildings: models.filter(isBldg).reduce((a, k) => a + c[k], 0),
+      trees: (c['bt-tree-street'] || 0) + (c['bt-tree-park'] || 0),
+      blenderDrawCalls: blender.drawCalls,
+      blenderErrors: [...blender.errors],
+      dayNightMode,
+      perModel: { ...c },
+    };
+  }
+
+  const api = {
+    update, syncTraffic, setTunnelGlow, buildingsNear, trafficFade, setDayNight, getStats,
+    get dayNightMode() { return dayNightMode; },
+    get blender() { return blender; }, // Blender pack handle (counts/ready/drawCalls)
+  };
+  // Debug/harness handle, mirrors window.__td3.
+  if (typeof window !== 'undefined') window.__city_v2 = api;
+  return api;
 }

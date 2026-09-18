@@ -1,0 +1,437 @@
+{
+ "categories": {
+  "buildings": [
+   {
+    "name": "bt-commercial-tower-1",
+    "file": "bt-commercial-tower-1.glb",
+    "footprint": [
+     16.0,
+     16.0,
+     44.45
+    ],
+    "preview": "previews/bt-commercial-tower-1.png",
+    "stats": {
+     "meshes": 61,
+     "materials": 6,
+     "primitives": 61,
+     "bytes": 92348
+    }
+   },
+   {
+    "name": "bt-commercial-tower-2",
+    "file": "bt-commercial-tower-2.glb",
+    "footprint": [
+     20.0,
+     14.0,
+     32.75
+    ],
+    "preview": "previews/bt-commercial-tower-2.png",
+    "stats": {
+     "meshes": 57,
+     "materials": 6,
+     "primitives": 57,
+     "bytes": 86516
+    }
+   },
+   {
+    "name": "bt-midrise-1",
+    "file": "bt-midrise-1.glb",
+    "footprint": [
+     14.0,
+     14.0,
+     18.85
+    ],
+    "preview": "previews/bt-midrise-1.png",
+    "stats": {
+     "meshes": 27,
+     "materials": 5,
+     "primitives": 27,
+     "bytes": 40480
+    }
+   },
+   {
+    "name": "bt-midrise-2",
+    "file": "bt-midrise-2.glb",
+    "footprint": [
+     16.0,
+     12.0,
+     14.25
+    ],
+    "preview": "previews/bt-midrise-2.png",
+    "stats": {
+     "meshes": 46,
+     "materials": 5,
+     "primitives": 46,
+     "bytes": 70188
+    }
+   },
+   {
+    "name": "bt-shophouse-1",
+    "file": "bt-shophouse-1.glb",
+    "footprint": [
+     10.0,
+     13.0,
+     8.65
+    ],
+    "preview": "previews/bt-shophouse-1.png",
+    "stats": {
+     "meshes": 15,
+     "materials": 8,
+     "primitives": 15,
+     "bytes": 23960
+    }
+   },
+   {
+    "name": "bt-shophouse-2",
+    "file": "bt-shophouse-2.glb",
+    "footprint": [
+     11.0,
+     12.0,
+     7.65
+    ],
+    "preview": "previews/bt-shophouse-2.png",
+    "stats": {
+     "meshes": 13,
+     "materials": 8,
+     "primitives": 13,
+     "bytes": 21228
+    }
+   },
+   {
+    "name": "bt-corner-building",
+    "file": "bt-corner-building.glb",
+    "footprint": [
+     14.0,
+     14.0,
+     12.85
+    ],
+    "preview": "previews/bt-corner-building.png",
+    "stats": {
+     "meshes": 15,
+     "materials": 9,
+     "primitives": 15,
+     "bytes": 24276
+    }
+   },
+   {
+    "name": "bt-commercial-tower-1a",
+    "file": "bt-commercial-tower-1a.glb",
+    "footprint": [
+     16.0,
+     16.0,
+     44.45
+    ],
+    "preview": "previews/bt-commercial-tower-1.png",
+    "stats": {
+     "meshes": 61,
+     "materials": 6,
+     "primitives": 61,
+     "bytes": 92360
+    },
+    "variant_of": "bt-commercial-tower-1"
+   },
+   {
+    "name": "bt-commercial-tower-1b",
+    "file": "bt-commercial-tower-1b.glb",
+    "footprint": [
+     16.0,
+     16.0,
+     44.45
+    ],
+    "preview": "previews/bt-commercial-tower-1.png",
+    "stats": {
+     "meshes": 61,
+     "materials": 6,
+     "primitives": 61,
+     "bytes": 92344
+    },
+    "variant_of": "bt-commercial-tower-1"
+   },
+   {
+    "name": "bt-commercial-tower-2a",
+    "file": "bt-commercial-tower-2a.glb",
+    "footprint": [
+     20.0,
+     14.0,
+     32.75
+    ],
+    "preview": "previews/bt-commercial-tower-2.png",
+    "stats": {
+     "meshes": 57,
+     "materials": 6,
+     "primitives": 57,
+     "bytes": 86512
+    },
+    "variant_of": "bt-commercial-tower-2"
+   },
+   {
+    "name": "bt-commercial-tower-2b",
+    "file": "bt-commercial-tower-2b.glb",
+    "footprint": [
+     20.0,
+     14.0,
+     32.75
+    ],
+    "preview": "previews/bt-commercial-tower-2.png",
+    "stats": {
+     "meshes": 57,
+     "materials": 6,
+     "primitives": 57,
+     "bytes": 86528
+    },
+    "variant_of": "bt-commercial-tower-2"
+   },
+   {
+    "name": "bt-midrise-1a",
+    "file": "bt-midrise-1a.glb",
+    "footprint": [
+     14.0,
+     14.0,
+     18.85
+    ],
+    "preview": "previews/bt-midrise-1.png",
+    "stats": {
+     "meshes": 27,
+     "materials": 5,
+     "primitives": 27,
+     "bytes": 40464
+    },
+    "variant_of": "bt-midrise-1"
+   }
+  ],
+  "props": [
+   {
+    "name": "bt-lamp-post",
+    "file": "bt-lamp-post.glb",
+    "footprint": [
+     1.7,
+     0.5,
+     5.61
+    ],
+    "preview": "previews/bt-lamp-post.png",
+    "stats": {
+     "meshes": 5,
+     "materials": 3,
+     "primitives": 5,
+     "bytes": 11308
+    }
+   },
+   {
+    "name": "bt-traffic-barrier",
+    "file": "bt-traffic-barrier.glb",
+    "footprint": [
+     2.2,
+     0.62,
+     1.2
+    ],
+    "preview": "previews/bt-traffic-barrier.png",
+    "stats": {
+     "meshes": 11,
+     "materials": 3,
+     "primitives": 11,
+     "bytes": 17492
+    }
+   },
+   {
+    "name": "bt-traffic-cone",
+    "file": "bt-traffic-cone.glb",
+    "footprint": [
+     0.38,
+     0.38,
+     0.54
+    ],
+    "preview": "previews/bt-traffic-cone.png",
+    "stats": {
+     "meshes": 3,
+     "materials": 3,
+     "primitives": 3,
+     "bytes": 8872
+    }
+   },
+   {
+    "name": "bt-bus-stop",
+    "file": "bt-bus-stop.glb",
+    "footprint": [
+     3.4,
+     1.6,
+     2.72
+    ],
+    "preview": "previews/bt-bus-stop.png",
+    "stats": {
+     "meshes": 9,
+     "materials": 5,
+     "primitives": 9,
+     "bytes": 14960
+    }
+   },
+   {
+    "name": "bt-signboard-pole",
+    "file": "bt-signboard-pole.glb",
+    "footprint": [
+     1.4,
+     0.45,
+     3.55
+    ],
+    "preview": "previews/bt-signboard-pole.png",
+    "stats": {
+     "meshes": 5,
+     "materials": 3,
+     "primitives": 5,
+     "bytes": 11404
+    }
+   },
+   {
+    "name": "bt-planter-box",
+    "file": "bt-planter-box.glb",
+    "footprint": [
+     1.3,
+     0.7,
+     1.06
+    ],
+    "preview": "previews/bt-planter-box.png",
+    "stats": {
+     "meshes": 6,
+     "materials": 4,
+     "primitives": 6,
+     "bytes": 31372
+    }
+   }
+  ],
+  "trees": [
+   {
+    "name": "bt-tree-street",
+    "file": "bt-tree-street.glb",
+    "footprint": [
+     2.87,
+     2.3,
+     3.98
+    ],
+    "preview": "previews/bt-tree-street.png",
+    "stats": {
+     "meshes": 5,
+     "materials": 3,
+     "primitives": 5,
+     "bytes": 32996
+    }
+   },
+   {
+    "name": "bt-tree-park",
+    "file": "bt-tree-park.glb",
+    "footprint": [
+     3.85,
+     3.55,
+     5.48
+    ],
+    "preview": "previews/bt-tree-park.png",
+    "stats": {
+     "meshes": 7,
+     "materials": 3,
+     "primitives": 7,
+     "bytes": 49788
+    }
+   }
+  ],
+  "roads": [
+   {
+    "name": "bt-road-straight",
+    "file": "bt-road-straight.glb",
+    "footprint": [
+     20.0,
+     11.4,
+     0.35
+    ],
+    "preview": "previews/bt-road-straight.png",
+    "stats": {
+     "meshes": 12,
+     "materials": 5,
+     "primitives": 12,
+     "bytes": 18852
+    }
+   },
+   {
+    "name": "bt-road-curve",
+    "file": "bt-road-curve.glb",
+    "footprint": [
+     17.84,
+     17.84,
+     0.35
+    ],
+    "preview": "previews/bt-road-curve.png",
+    "stats": {
+     "meshes": 13,
+     "materials": 5,
+     "primitives": 13,
+     "bytes": 68856
+    }
+   }
+  ],
+  "vehicles": [
+   {
+    "name": "bt-car-sedan",
+    "file": "bt-car-sedan.glb",
+    "footprint": [
+     4.52,
+     1.9,
+     1.51
+    ],
+    "preview": "previews/bt-car-sedan.png",
+    "stats": {
+     "meshes": 16,
+     "materials": 6,
+     "primitives": 16,
+     "bytes": 39568
+    }
+   },
+   {
+    "name": "bt-car-taxi",
+    "file": "bt-car-taxi.glb",
+    "footprint": [
+     4.52,
+     1.9,
+     1.72
+    ],
+    "preview": "previews/bt-car-taxi.png",
+    "stats": {
+     "meshes": 17,
+     "materials": 7,
+     "primitives": 17,
+     "bytes": 41384
+    }
+   },
+   {
+    "name": "bt-car-van",
+    "file": "bt-car-van.glb",
+    "footprint": [
+     4.72,
+     1.98,
+     1.73
+    ],
+    "preview": "previews/bt-car-van.png",
+    "stats": {
+     "meshes": 16,
+     "materials": 6,
+     "primitives": 16,
+     "bytes": 39424
+    }
+   },
+   {
+    "name": "bt-truck-box",
+    "file": "bt-truck-box.glb",
+    "footprint": [
+     5.33,
+     2.1,
+     2.6
+    ],
+    "preview": "previews/bt-truck-box.png",
+    "stats": {
+     "meshes": 20,
+     "materials": 7,
+     "primitives": 20,
+     "bytes": 52120
+    }
+   }
+  ]
+ },
+ "namespace": "bt-",
+ "notes": "Deterministic Blender-built assets. +Z up, meters. Skirt-grounded; clean PBR, no baked shadows."
+}
