@@ -1,0 +1,191 @@
+{
+  "scene": "harbor-west",
+  "units": "meters",
+  "notes": "Blender +Z-up source; three.js Y-up in GLB. Real Japanese text baked with Noto Sans CJK.",
+  "categories": {
+    "buildings": [
+      {
+        "name": "bt-hw-wh-a",
+        "footprint_m": [
+          12.8,
+          14.8
+        ],
+        "height_m": 7.3
+      },
+      {
+        "name": "bt-hw-wh-b",
+        "footprint_m": [
+          14.8,
+          16.8
+        ],
+        "height_m": 11.3
+      },
+      {
+        "name": "bt-hw-wh-c",
+        "footprint_m": [
+          14.8,
+          18.8
+        ],
+        "height_m": 13.3
+      }
+    ],
+    "signs": [
+      {
+        "name": "bt-hw-sign-soko",
+        "text": "倉庫",
+        "footprint_m": [
+          0.8,
+          1.8
+        ],
+        "height_m": 4.8999999999999995
+      },
+      {
+        "name": "bt-hw-sign-minato",
+        "text": "港",
+        "footprint_m": [
+          0.8,
+          2.9
+        ],
+        "height_m": 1.9000000000000001
+      }
+    ],
+    "props": [
+      {
+        "name": "bt-hw-cont-r",
+        "footprint_m": [
+          6.26,
+          2.64
+        ],
+        "height_m": 2.79
+      },
+      {
+        "name": "bt-hw-cont-b",
+        "footprint_m": [
+          6.26,
+          2.64
+        ],
+        "height_m": 2.79
+      },
+      {
+        "name": "bt-hw-cont-g",
+        "footprint_m": [
+          6.26,
+          2.64
+        ],
+        "height_m": 2.79
+      },
+      {
+        "name": "bt-hw-lamp",
+        "footprint_m": [
+          0.9,
+          0.9
+        ],
+        "height_m": 9.4
+      },
+      {
+        "name": "bt-hw-blamp",
+        "footprint_m": [
+          0.5,
+          0.5
+        ],
+        "height_m": 1.05
+      },
+      {
+        "name": "bt-hw-bollard",
+        "footprint_m": [
+          0.9,
+          0.5
+        ],
+        "height_m": 1.0
+      },
+      {
+        "name": "bt-hw-tire",
+        "footprint_m": [
+          0.6,
+          0.3
+        ],
+        "height_m": 0.7
+      },
+      {
+        "name": "bt-hw-lifering",
+        "footprint_m": [
+          0.4,
+          0.4
+        ],
+        "height_m": 1.4
+      },
+      {
+        "name": "bt-hw-pallet",
+        "footprint_m": [
+          1.2,
+          1.2
+        ],
+        "height_m": 1.4
+      },
+      {
+        "name": "bt-hw-crate",
+        "footprint_m": [
+          1.2000000000000002,
+          1.2000000000000002
+        ],
+        "height_m": 1.2000000000000002
+      },
+      {
+        "name": "bt-hw-barrel",
+        "footprint_m": [
+          0.65,
+          0.65
+        ],
+        "height_m": 0.95
+      }
+    ],
+    "vegetation": [],
+    "vehicles": [
+      {
+        "name": "bt-hw-forklift",
+        "footprint_m": [
+          1.3,
+          2.3
+        ],
+        "height_m": 2.4
+      },
+      {
+        "name": "bt-hw-boat",
+        "footprint_m": [
+          2.0,
+          6.6
+        ],
+        "height_m": 3.6
+      }
+    ],
+    "pedestrians": [
+      {
+        "name": "bt-hw-worker",
+        "footprint_m": [
+          0.5,
+          0.35
+        ],
+        "height_m": 1.75
+      }
+    ],
+    "roads": [
+      {
+        "name": "bt-hw-ground",
+        "footprint_m": [
+          67.0,
+          80.0
+        ],
+        "height_m": 0.3
+      },
+      {
+        "name": "bt-hw-markings",
+        "footprint_m": [
+          17.0,
+          80.0
+        ],
+        "height_m": 0.02
+      }
+    ]
+  },
+  "asset_count": 21
+}
