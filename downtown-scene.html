@@ -59,6 +59,33 @@ function shade(hex,f){const n=parseInt(hex.slice(1),16);const r=Math.min(255,((n
 const CJK = '"Noto Sans CJK JP","Noto Sans CJK",sans-serif';
 function cnv(w,h){ const c=document.createElement('canvas'); c.width=w; c.height=h; return [c, c.getContext('2d')]; }
 function tex(c, srgb=true){ const t=new THREE.CanvasTexture(c); if(srgb) t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=8; return t; }
+// QA-fix: lighten a hex color toward white for day-mode albedo lift
+function lightenHex(hex, amt){
+  const n=parseInt(String(hex).replace('#',''),16);
+  const r=n>>16&255, g=n>>8&255, b=n&255;
+  const m=v=>Math.round(v+(255-v)*amt);
+  return `rgb(${m(r)},${m(g)},${m(b)})`;
+}
+// QA-fix: day skyline — hazy unlit silhouettes, never black towers with lights on, never a void
+function daySkylineTexture(){
+  const [c,g]=cnv(2048,256); const rnd=mulberry32(78);
+  g.clearRect(0,0,2048,256);
+  const haze=g.createLinearGradient(0,0,0,256);
+  haze.addColorStop(0,'rgba(168,196,224,0)');
+  haze.addColorStop(1,'rgba(168,196,224,0.55)');
+  g.fillStyle=haze; g.fillRect(0,110,2048,146);
+  let x=0;
+  while(x<2048){
+    const bw=70+rnd()*130, bh=60+rnd()*160;
+    const tone=150+rnd()*40|0;
+    g.fillStyle=`rgb(${tone-30},${tone-8},${tone+10})`;
+    g.fillRect(x,256-bh,bw,bh);
+    if(rnd()<0.4){ g.fillStyle=`rgb(${tone-45},${tone-25},${tone-5})`;
+      g.fillRect(x+bw*0.3,256-bh-14,bw*0.2,14); }
+    x+=bw+10+rnd()*60;
+  }
+  return tex(c);
+}
 // vertical Japanese text block (chars stacked top -> bottom), centered at (cx,cy)
 function vText(g, text, cx, cy, fs, color, dy=1.04){
   g.save(); g.fillStyle=color; g.textAlign='center'; g.textBaseline='middle';
@@ -140,7 +167,8 @@ function facadeTexture(o){
   const rnd=mulberry32(o.seed);
   const W=512, rowH=96, H=o.stories*rowH;
   const [c,g]=cnv(W,H);
-  g.fillStyle=o.tint; g.fillRect(0,0,W,H);
+  // QA-fix: day facades get a lighter tint + unlit reflective glass, never lit windows
+  g.fillStyle=o.day? lightenHex(o.tint,0.55) : o.tint; g.fillRect(0,0,W,H);
   g.strokeStyle='rgba(0,0,0,0.35)'; g.lineWidth=3;
   for(let s=0;s<=o.stories;s++){ g.beginPath(); g.moveTo(0,s*rowH); g.lineTo(W,s*rowH); g.stroke(); }
   const cols=Math.max(4, Math.round(o.w/2.6));   // dense column count for towers
@@ -148,7 +176,9 @@ function facadeTexture(o){
     for(let i=0;i<cols;i++){
       const wx=10+i*(W-20)/cols, ww=(W-20)/cols-12, wy=s*rowH+22, wh=rowH-44;
       const lit=rnd()<o.lit;
-      if(lit){
+      if(o.day){
+        g.fillStyle='rgba(126,146,164,0.92)';
+      } else if(lit){
         const r=rnd();
         // warm amber + cool white mix, a few teal accent floors
         g.fillStyle= r<0.62? `rgba(255,${186+rnd()*40|0},${110+rnd()*30|0},0.95)`
@@ -322,6 +352,9 @@ for (const [x,z] of [[-8.2,-14],[8.2,-38],[-8.2,-62],[8.2,-86],[-8.2,-108]]){
 
 // ---------- shared materials ----------
 const dimmables=[]; // day/night dimming registry
+const dayLifts=[];   // QA-fix: day albedo lift registry (declared early: MAT lift calls run at module top level)
+const facadeSwaps=[]; // QA-fix: facade texture swap registry
+const roadSwaps=[];   // QA-fix: road texture swap registry (day asphalt is lighter than baked night texture)
 const MAT = {
   steelDark: new THREE.MeshStandardMaterial({ color:0x1a1e26, roughness:0.55, metalness:0.65 }),
   blackSteel:new THREE.MeshStandardMaterial({ color:0x141821, roughness:0.5,  metalness:0.7 }),
@@ -335,6 +368,16 @@ const MAT = {
   evaGreenDk:new THREE.MeshStandardMaterial({ color:0x2a5239, roughness:0.55, metalness:0.35 }),
   white:     new THREE.MeshStandardMaterial({ color:0xd8dce4, roughness:0.7 }),
 };
+// QA-fix: day albedo lift for shared night-dark materials
+regDayLift(MAT.steelDark,  0x1a1e26, 0x707886);
+regDayLift(MAT.blackSteel, 0x141821, 0x6a717d);
+regDayLift(MAT.concrete,   0x3a3e46, 0xa6acb4);
+regDayLift(MAT.plinth,     0x20252e, 0x9399a1);
+regDayLift(MAT.frameDark,  0x101319, 0x636a76);
+regDayLift(MAT.glass,      0x4a5a6a, 0xa3b8cc);
+regDayLift(MAT.poleConc,   0x2c2f36, 0x8e949c);
+regDayLift(MAT.evaGreen,   0x3f7a55, 0x86b894);
+regDayLift(MAT.evaGreenDk, 0x2a5239, 0x6a8f76);
 function box(w,h,d,mat,x=0,y=0,z=0){
   const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat);
   m.position.set(x,y,z); m.castShadow=true; m.receiveShadow=true; return m;
@@ -346,35 +389,84 @@ function emissiveBoard(w,h,t,canvasTex,intensity=1.6){
   const mesh=new THREE.Mesh(new THREE.BoxGeometry(w,h,t),m);
   mesh.castShadow=true; return mesh;
 }
+// day/night dimming registry: emissive signage + neon drop to near-off by day
+// (QA-fix: lights must read OFF in day, not 32-40% lit)
 function regDimStd(mat, base){ dimmables.push({ mat, base, std:true }); }
 function regDimBasic(mat){ dimmables.push({ mat, base:mat.color.clone(), std:false }); }
 function applyDim(night){
   for(const d of dimmables){
-    if(d.std) d.mat.emissiveIntensity=d.base*(night?1:0.32);
-    else d.mat.color.copy(d.base).multiplyScalar(night?1:0.40);
+    if(d.std) d.mat.emissiveIntensity=d.base*(night?1:0.03);
+    else d.mat.color.copy(d.base).multiplyScalar(night?1:0.08);
   }
-  for(const b of beacons) b.mat.color.copy(b.base).multiplyScalar(night?1:0.40);
+  for(const b of beacons){
+    b.mat.color.copy(b.base).multiplyScalar(night?1:0.08);
+    if(b.halo) b.halo.opacity=night?0.5:0.06;
+  }
+}
+// QA-fix: day albedo lift — night-dark material colors swap to sunlit daytime values
+function regDayLift(mat, nightHex, dayHex){
+  dayLifts.push({ mat, night:new THREE.Color(nightHex), day:new THREE.Color(dayHex) });
+}
+function applyDayLift(night){
+  for(const d of dayLifts) d.mat.color.copy(night?d.night:d.day);
+}
+// QA-fix: facade texture swap (lit windows by night, unlit reflective glass by day)
+function applyFacadeSwap(night){
+  for(const f of facadeSwaps){ f.mat.map=night?f.night:f.day; f.mat.needsUpdate=true; }
+}
+// QA-fix: road texture swap (sunlit asphalt by day; the night texture is too dark to lift)
+function applyRoadSwap(night){
+  for(const f of roadSwaps){ f.mat.map=night?f.night:f.day; f.mat.needsUpdate=true; }
+}
+// QA-fix: day road texture — sunlit medium asphalt, same markings as the night version
+function roadTextureDay(){
+  const W=512, L=2048;
+  const [c,g]=cnv(W,L);
+  const rnd=mulberry32(99);
+  g.fillStyle='#585d66'; g.fillRect(0,0,W,L);
+  for(let i=0;i<9000;i++){
+    const v=rnd();
+    g.fillStyle=`rgba(${88+v*44|0},${92+v*46|0},${100+v*50|0},${0.22+rnd()*0.25})`;
+    g.fillRect(rnd()*W, rnd()*L, 1.6, 1.6);
+  }
+  const zToY=z=>(14-z)/130*L;
+  g.fillStyle='rgba(235,238,245,0.9)';
+  g.fillRect(14,0,5,L); g.fillRect(W-19,0,5,L);
+  g.fillStyle='rgba(240,243,250,0.92)';
+  for(let z=10;z>-112;z-=6){
+    g.fillRect(W/2-26, zToY(z), 5, 26);
+    g.fillRect(W/2+21, zToY(z), 5, 26);
+  }
+  g.fillRect(W/2-3, 0, 6, L);
+  g.fillStyle='rgba(238,242,248,0.95)';
+  for(let x=-6;x<6;x+=1.6) g.fillRect((x+7)/14*W, zToY(-4.5), 1.1/14*W, 3/130*L);
+  return tex(c);
 }
 
 // ---------- ground: mirror-wet asphalt, sidewalks, curbs ----------
 function buildGround(){
   const base=new THREE.Mesh(new THREE.PlaneGeometry(420,420),
     new THREE.MeshStandardMaterial({ color:0x0c0e13, roughness:0.95 }));
+  regDayLift(base.material, 0x0c0e13, 0x6e747c); // QA-fix: day ground reads sunlit, not night-dark
   base.rotation.x=-Math.PI/2; base.position.set(0,-0.08,-50); base.receiveShadow=true; scene.add(base);
 
   const road=new THREE.Mesh(new THREE.PlaneGeometry(14,130),
     new THREE.MeshStandardMaterial({ map:roadTexture(), roughness:0.26, metalness:0.18 }));
+  regDayLift(road.material, 0xffffff, 0xd9dee6);
+  roadSwaps.push({ mat:road.material, night:road.material.map, day:roadTextureDay() }); // QA-fix: day road map
   road.rotation.x=-Math.PI/2; road.position.set(0,0,-51); road.receiveShadow=true; scene.add(road);
 
   const conc=concreteTexture(); conc.repeat.set(1,16);
   for(const s of [-1,1]){
     const sw=new THREE.Mesh(new THREE.PlaneGeometry(4.6,132),
       new THREE.MeshStandardMaterial({ map:conc.clone(), roughness:0.55, metalness:0.05 }));
+    regDayLift(sw.material, 0xffffff, 0xe8ebef);
     sw.material.map.repeat.set(1,16);
     sw.rotation.x=-Math.PI/2; sw.position.set(s*9.4,0.15,-51); sw.receiveShadow=true; scene.add(sw);
     const curb=box(0.35,0.32,132,MAT.plinth,s*7.18,0.0,-51); scene.add(curb);
     const ap=new THREE.Mesh(new THREE.PlaneGeometry(6,132),
       new THREE.MeshStandardMaterial({ color:0x1c1f26, roughness:0.8 }));
+    regDayLift(ap.material, 0x1c1f26, 0x7f848c);
     ap.rotation.x=-Math.PI/2; ap.position.set(s*14.7,0.02,-51); ap.receiveShadow=true; scene.add(ap);
   }
 }
@@ -497,10 +589,14 @@ function makeTower(b){
   const depth=14, cx=b.x + (b.dir>0? -depth/2 : depth/2);
   const fx=b.x;
   const ft=facadeTexture({ w:b.w, h:b.h, stories:b.stories, tint:b.tint, seed:b.seed, lit:b.lit });
+  // QA-fix: day tower facade — unlit reflective glass, lighter tint (swapped in setNight)
+  const ftDay=facadeTexture({ w:b.w, h:b.h, stories:b.stories, tint:b.tint, seed:b.seed, lit:0.0, day:true });
   const facMat=new THREE.MeshStandardMaterial({ map:ft, emissive:0xffffff,
     emissiveMap:ft, emissiveIntensity:1.15, roughness:0.8 });
   regDimStd(facMat, 1.15);
+  facadeSwaps.push({ mat:facMat, night:ft, day:ftDay });
   const topMat=new THREE.MeshStandardMaterial({ color:0x15171e, roughness:0.95 });
+  regDayLift(topMat, 0x15171e, 0x7d838e);
   const body=new THREE.Mesh(new THREE.BoxGeometry(depth, b.h, b.w),
     [facMat,facMat,topMat,topMat,facMat,facMat]);
   body.position.set(cx, b.h/2, b.z); body.castShadow=true; body.receiveShadow=true; g.add(body);
@@ -728,17 +824,19 @@ function updateTrains(t){
 
 // ---------- EVA pedestrian overpass: green steel, stairs, 第3新東京市 beam sign ----------
 // crosses the street at z=-45; stairs land on both sidewalks
+// QA-fix: sign is gantry-sized and clears traffic — smaller text, sign panel is
+// 9m x 1m mounted ABOVE the deck (bottom edge 5.25m), never hanging into traffic
 function overpassBeamTexture(){
-  const [c,g]=cnv(1600,220);
-  g.fillStyle='#e8e4d8'; g.fillRect(0,0,1600,220);
+  const [c,g]=cnv(1800,200);
+  g.fillStyle='#e8e4d8'; g.fillRect(0,0,1800,200);
   g.fillStyle='#2a3038'; g.textAlign='center'; g.textBaseline='middle';
-  let fs=104;
+  let fs=64;
   g.font=`900 ${fs}px ${CJK}`;
-  while(g.measureText('第3新東京市  旧仙石原高原五丁目').width>1480 && fs>40){ fs-=6; g.font=`900 ${fs}px ${CJK}`; }
-  g.fillText('第3新東京市  旧仙石原高原五丁目', 800, 92);
-  g.font=`700 44px ${CJK}`; g.fillStyle='#6a7078';
-  g.fillText('TOKYO-3   Kyu-sengokuhara-kogen 5', 800, 168);
-  g.strokeStyle='#2a3038'; g.lineWidth=8; g.strokeRect(8,8,1584,204);
+  while(g.measureText('第3新東京市  旧仙石原高原五丁目').width>1700 && fs>28){ fs-=4; g.font=`900 ${fs}px ${CJK}`; }
+  g.fillText('第3新東京市  旧仙石原高原五丁目', 900, 82);
+  g.font=`700 30px ${CJK}`; g.fillStyle='#6a7078';
+  g.fillText('TOKYO-3   Kyu-sengokuhara-kogen 5', 900, 152);
+  g.strokeStyle='#2a3038'; g.lineWidth=7; g.strokeRect(8,8,1784,184);
   return tex(c);
 }
 function warningSignTexture(){
@@ -792,19 +890,20 @@ function buildOverpass(){
       g.add(boxBetween(a, b, 0.08, 0.08, MAT.evaGreen));
     }
   }
-  // beam sign: 第3新東京市 — bolted between the deck fascia and the rail band
+  // beam sign: 第3新東京市 — gantry-sized panel bolted to the deck fascia ABOVE
+  // the deck (bottom edge 5.25m: clears all traffic like a real overpass gantry)
   const bt=overpassBeamTexture();
   const bsM=new THREE.MeshStandardMaterial({ map:bt, emissive:0xffffff, emissiveMap:bt,
     emissiveIntensity:0.9, roughness:0.5 });
   regDimStd(bsM, 0.9);
   for(const sz of [-1,1]){
-    const sign=new THREE.Mesh(new THREE.PlaneGeometry(16,2.2), bsM);
-    sign.position.set(0, DECK_Y-1.7, OZ+sz*1.47);
+    const sign=new THREE.Mesh(new THREE.PlaneGeometry(9,1.0), bsM);
+    sign.position.set(0, DECK_Y+0.55, OZ+sz*1.47);
     if(sz<0) sign.rotation.y=Math.PI;
     g.add(sign);
-    // cleats bolting the sign to the deck fascia
-    for(const cx of [-6,-2,2,6])
-      g.add(box(0.16,0.3,0.16,MAT.blackSteel, cx, DECK_Y-0.65, OZ+sz*1.44));
+    // cleats bolting the sign bottom to the deck fascia
+    for(const cx of [-3.5,0,3.5])
+      g.add(box(0.16,0.5,0.16,MAT.blackSteel, cx, DECK_Y+0.05, OZ+sz*1.44));
   }
   // yellow 架空線注意 warning sign on the west stair column (bracket-mounted, EVA ref)
   const wt=warningSignTexture();
@@ -929,10 +1028,13 @@ function pedestrian(x,z,rotY,seed){
 function car(x,z,rotY,seed){
   const g=new THREE.Group();
   const cols=[0x3a3f4a,0x5a1a1a,0x1a2a3a,0x4a4a4e];
+  const dayCols=[0xb9c0cb,0xd89090,0x9ab8d8,0xc9ccd2]; // QA-fix: cars read as real paint in day, not black
   const cm=new THREE.MeshStandardMaterial({ color:cols[seed%4], roughness:0.35, metalness:0.5 });
+  regDayLift(cm, cols[seed%4], dayCols[seed%4]);
   const body=box(1.8,0.75,4.2,cm, 0, 0.75, 0); g.add(body);
   g.add(box(1.6,0.6,2.2,cm, 0, 1.35, -0.2));
   const wm=new THREE.MeshStandardMaterial({ color:0x111418, roughness:0.6 });
+  regDayLift(wm, 0x111418, 0x3a3f46);
   for(const [wx,wz] of [[-0.85,1.35],[0.85,1.35],[-0.85,-1.35],[0.85,-1.35]]){
     const w=new THREE.Mesh(new THREE.CylinderGeometry(0.33,0.33,0.24,12), wm);
     w.rotation.z=Math.PI/2; w.position.set(wx,0.33,wz); w.castShadow=true; g.add(w);
@@ -954,15 +1056,17 @@ function car(x,z,rotY,seed){
 
 // ---------- distant skyline silhouette + sky dome ----------
 function buildSkyline(){
-  const m=new THREE.Mesh(new THREE.PlaneGeometry(760,110),
-    new THREE.MeshBasicMaterial({ map:skylineTexture(), transparent:true, fog:false, depthWrite:false }));
+  const skylineMat=new THREE.MeshBasicMaterial({ map:skylineTexture(), transparent:true, fog:false, depthWrite:false });
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(760,110), skylineMat);
   m.position.set(0,40,-225); scene.add(m);
   const m2=m.clone(); m2.position.set(-260,36,60); m2.rotation.y=Math.PI/2.4; scene.add(m2);
   const m3=m.clone(); m3.position.set(260,36,60); m3.rotation.y=-Math.PI/2.4; scene.add(m3);
   const skyMat=new THREE.MeshBasicMaterial({ map:skyTexture(true), side:THREE.BackSide, fog:false, depthWrite:false });
   const dome=new THREE.Mesh(new THREE.SphereGeometry(400,32,20), skyMat);
   dome.position.set(0,0,-60); scene.add(dome);
-  window.__sp2sky={ skyMat, day:skyTexture(false), night:skyMat.map };
+  // QA-fix: day keeps skylines — unlit hazy silhouettes, never a void
+  window.__sp2sky={ skyMat, day:skyTexture(false), night:skyMat.map,
+    skylineMat, skylineDay:daySkylineTexture(), skylineNight:skylineMat.map };
 }
 
 // ---------- day/night ----------
@@ -978,6 +1082,7 @@ function setNight(on){
     lampLights.forEach(p=>p.intensity=26);
     renderer.toneMappingExposure=1.35;
     window.__sp2sky.skyMat.map=window.__sp2sky.night;
+    window.__sp2sky.skylineMat.map=window.__sp2sky.skylineNight;
   } else {
     scene.background.set(0x9fc3e8); scene.fog.color.set(0x9fc3e8);
     hemi.intensity=1.25; hemi.color.set(0xbfd9ff); hemi.groundColor.set(0x6a7078);
@@ -987,9 +1092,14 @@ function setNight(on){
     lampLights.forEach(p=>p.intensity=0);
     renderer.toneMappingExposure=1.0;
     window.__sp2sky.skyMat.map=window.__sp2sky.day;
+    window.__sp2sky.skylineMat.map=window.__sp2sky.skylineDay;
   }
   window.__sp2sky.skyMat.needsUpdate=true;
+  window.__sp2sky.skylineMat.needsUpdate=true;
   applyDim(on);
+  applyDayLift(on);   // QA-fix: day albedo lift so roads/buildings/cars read sunlit
+  applyFacadeSwap(on);
+  applyRoadSwap(on);
   window.__sp.night=on;
 }
 document.getElementById('btn-day').onclick=()=>setNight(false);

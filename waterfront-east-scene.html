@@ -378,7 +378,7 @@ function deckStreak(x, z, t, tint=0xff9a3c, w=2.4, len=15, opacity=0.28){
 function waterStreak(x, z, tint, w, len, opacity, alongX=false){
   const m = new THREE.Mesh(new THREE.PlaneGeometry(alongX?len:w, alongX?w:len),
     new THREE.MeshBasicMaterial({ map: streakTex, color: tint, transparent:true,
-      opacity, blending: THREE.AdditiveBlending, depthWrite:false }));
+      opacity, blending: THREE.AdditiveBlending, depthWrite:false, fog:false }));
   m.rotation.x = -Math.PI/2; m.rotation.z = Math.PI;
   m.position.set(x, -1.35, z); scene.add(m);   // above the wave crests (max ~-1.55)
   m.userData.nightFx = true; nightFx.push(m);
@@ -820,10 +820,38 @@ function buildSkylineReflections(){
   // The parapet hides near water; only the far band (side-distance > ~150 m) clears
   // it. These sit in that visible far water, in-frame, reading as skyline reflections.
   // (x, z) pairs avoid the bay bridge at x=185.
+  // NOTE: flat waterStreaks are near-invisible at this grazing angle, so the visible
+  // band uses vertical billboard pillars instead (see reflectionPillar).
   const visTints = [0xffb35e, 0x9fc4e8, 0xffa64d, 0x9fd0ff, 0xffc37a, 0x8fb8e8];
   const visXZ = [[100,-120],[125,-145],[150,-170],[230,-220],[255,-245],[280,-270]];
   for(let i=0;i<visXZ.length;i++)
-    waterStreak(visXZ[i][0], visXZ[i][1], visTints[i], 10, 60, 0.5, true);
+    reflectionPillar(visXZ[i][0], visXZ[i][1], visTints[i], 45, 11, 0.75);
+}
+// QA-fix: vertical billboard reflection pillar — a flat streak on the water is
+// near-invisible from the driver's grazing angle, so the visible-band reflections
+// are vertical gradient pillars rising from the waterline. Y-billboarded (stays
+// vertical), additive, night-only via nightFx.
+function reflectionPillar(x, z, tint, height, width, opacity){
+  const c = document.createElement('canvas'); c.width=64; c.height=256;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0,256,0,0);
+  const col = '#'+new THREE.Color(tint).getHexString();
+  grad.addColorStop(0, col); grad.addColorStop(0.35, col+'aa'); grad.addColorStop(1, col+'00');
+  g.fillStyle=grad; g.fillRect(0,0,64,256);
+  // horizontal soft edge
+  const img = g.getImageData(0,0,64,256), d = img.data;
+  for(let py=0; py<256; py++) for(let px=0; px<64; px++){
+    const edge = Math.sin(Math.PI*px/64);
+    d[(py*64+px)*4+3] *= edge*edge;
+  }
+  g.putImageData(img,0,0);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(width, height),
+    new THREE.MeshBasicMaterial({ map:t, color:0xffffff, transparent:true,
+      opacity, blending:THREE.AdditiveBlending, depthWrite:false, fog:false }));
+  m.position.set(x, -1.5+height/2, z); scene.add(m);
+  m.onBeforeRender = (r,s,cam)=>{ m.rotation.y = Math.atan2(cam.position.x-m.position.x, cam.position.z-m.position.z); };
+  m.userData.nightFx = true; nightFx.push(m);
 }
 
 // ---------- ferris wheel (far right, legs planted on the land) ----------

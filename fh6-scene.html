@@ -205,6 +205,32 @@ function barrierTexture(){
   const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace;
   return t;
 }
+// day variant: hazy blue-grey silhouettes, NO lit windows (Craig: day must not show
+// black towers with lights on, and never a pure-blue void)
+function daySkylineTexture(){
+  const c=document.createElement('canvas'); c.width=2048; c.height=256;
+  const g=c.getContext('2d'), rnd=mulberry32(99);
+  g.clearRect(0,0,2048,256);
+  // distant haze band behind the towers
+  const haze=g.createLinearGradient(0,0,0,256);
+  haze.addColorStop(0,'rgba(160,190,220,0)');
+  haze.addColorStop(1,'rgba(160,190,220,0.55)');
+  g.fillStyle=haze; g.fillRect(0,120,2048,136);
+  let x=0;
+  while(x<2048){
+    const bw=40+rnd()*110, bh=60+rnd()*150;
+    // hazy blue-grey silhouette, lighter with distance feel
+    const tone=150+rnd()*40|0;
+    g.fillStyle=`rgb(${tone-30},${tone-8},${tone+10})`;
+    g.fillRect(x,256-bh,bw,bh);
+    // faint rooftop boxes / antennae, no lights
+    if(rnd()<0.5){ g.fillStyle=`rgb(${tone-45},${tone-25},${tone-5})`;
+      g.fillRect(x+bw*0.3,256-bh-14,bw*0.22,14); }
+    x+=bw+rnd()*30;
+  }
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace;
+  return t;
+}
 function skyTexture(night){
   const c=document.createElement('canvas'); c.width=1024; c.height=512;
   const g=c.getContext('2d');
@@ -312,6 +338,8 @@ const skyDome=new THREE.Mesh(new THREE.SphereGeometry(320,32,20),skyMat);
 skyDome.position.set(0,0,-60); scene.add(skyDome);
 const daySkyTex=skyTexture(false), nightSkyTex=skyMat.map;
 const skylineMat=new THREE.MeshBasicMaterial({map:skylineTexture(),transparent:true,fog:false,depthWrite:false});
+// QA-fix: day keeps the skyline visible with an unlit silhouette texture (never a void)
+const skylineNightTex=skylineMat.map, skylineDayTex=daySkylineTexture();
 const skyline=new THREE.Mesh(new THREE.PlaneGeometry(560,70),skylineMat);
 skyline.position.set(0,26,-175); scene.add(skyline);
 
@@ -392,6 +420,19 @@ function applyWetRoad(night){
 }
 
 const streakMats=[];   // every entry: material with userData.baseOp
+// QA-fix: day mode kills all emissive "lights-on" materials (storefronts, windows, signs),
+// night restores each material's own recorded base intensity.
+function applyEmissiveDay(night){
+  scene.traverse(n=>{
+    if(!n.isMesh) return;
+    const ms=Array.isArray(n.material)?n.material:[n.material];
+    for(const m of ms){
+      if(!m||!('emissiveIntensity' in m)) continue;
+      if(m.userData._nightEI===undefined) m.userData._nightEI=m.emissiveIntensity;
+      m.emissiveIntensity=night?m.userData._nightEI:0.0;
+    }
+  });
+}
 function setNight(on){
   document.getElementById('btn-night').classList.toggle('on',on);
   document.getElementById('btn-day').classList.toggle('on',!on);
@@ -404,7 +445,8 @@ function setNight(on){
     brightMat.uniforms.uThreshold.value=0.85;
     compMat.uniforms.uStrength.value=0.55;
     compMat.uniforms.uExposure.value=1.3;
-    skyMat.map=nightSkyTex; skyline.visible=true;
+    skyMat.map=nightSkyTex; skylineMat.map=skylineNightTex; skyline.visible=true;
+    applyEmissiveDay(true);
   } else {
     scene.background.set(0x9fc3e8); scene.fog.color.set(0x9fc3e8);
     hemi.intensity=1.1; hemi.color.set(0xbfd9ff); hemi.groundColor.set(0x6a7078);
@@ -414,10 +456,12 @@ function setNight(on){
     brightMat.uniforms.uThreshold.value=1.05;
     compMat.uniforms.uStrength.value=0.32;
     compMat.uniforms.uExposure.value=1.0;
-    skyMat.map=daySkyTex; skyline.visible=false;
+    skyMat.map=daySkyTex; skylineMat.map=skylineDayTex; skyline.visible=true;
+    applyEmissiveDay(false);
   }
-  skyMat.needsUpdate=true;
-  for(const m of streakMats) m.opacity=m.userData.baseOp*(on?1:0.22);
+  skyMat.needsUpdate=true; skylineMat.needsUpdate=true;
+  // QA-fix: day storefront/window/sign emissives go fully dark; night restores the recorded base
+  for(const m of streakMats) m.opacity=m.userData.baseOp*(on?1:0.0);
   applyWetRoad(on);
   window.__fh6.night=on;
   markDirty();
