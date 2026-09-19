@@ -119,10 +119,10 @@ function interiorTexture(seed, warm='#ffca7a'){
   const rnd=mulberry32(seed);
   const [c,g]=cnv(512,256);
   const grad=g.createLinearGradient(0,0,0,256);
-  grad.addColorStop(0,shade(warm,0.95)); grad.addColorStop(0.6,shade(warm,0.62)); grad.addColorStop(1,shade(warm,0.34));
+  grad.addColorStop(0,shade(warm,1.0)); grad.addColorStop(0.6,shade(warm,0.72)); grad.addColorStop(1,shade(warm,0.45));
   g.fillStyle=grad; g.fillRect(0,0,512,256);
   // shelf bands with goods silhouettes (abstract, dark against glow)
-  g.fillStyle='rgba(40,22,10,0.55)';
+  g.fillStyle='rgba(40,22,10,0.42)';
   for(let s=0;s<3;s++){
     const y=70+s*58;
     g.fillRect(0,y,512,10);
@@ -132,7 +132,7 @@ function interiorTexture(seed, warm='#ffca7a'){
     }
   }
   // counter at bottom
-  g.fillStyle='rgba(30,16,8,0.6)'; g.fillRect(0,214,512,42);
+  g.fillStyle='rgba(30,16,8,0.5)'; g.fillRect(0,214,512,42);
   return tex(c);
 }
 // --- upper-facade texture: window grid, some lit ---
@@ -332,8 +332,8 @@ const MAT = {
   concrete:  new THREE.MeshStandardMaterial({ color:0x3a3e46, roughness:0.9, metalness:0.0 }),
   plinth:    new THREE.MeshStandardMaterial({ color:0x20252e, roughness:0.8, metalness:0.05 }),
   frameDark: new THREE.MeshStandardMaterial({ color:0x101319, roughness:0.45, metalness:0.6 }),
-  glass:     new THREE.MeshStandardMaterial({ color:0x2a3a4a, roughness:0.08, metalness:0.4,
-    transparent:true, opacity:0.42 }),
+  glass:     new THREE.MeshStandardMaterial({ color:0x4a5a6a, roughness:0.12, metalness:0.25,
+    transparent:true, opacity:0.30 }),
   neonRed:   new THREE.MeshBasicMaterial({ color:0xff2b2b }),
   neonTube:  new THREE.MeshBasicMaterial({ color:0xff4040 }),
   white:     new THREE.MeshStandardMaterial({ color:0xd8dce4, roughness:0.7 }),
@@ -460,7 +460,7 @@ function storefront(b, fx){
   g.add(box(revD,0.28,W-1.24,MAT.frameDark, fx-dir*revD/2+dir*0.02, GF-0.72, b.z)); // soffit
   // interior warm glow plane at the back of the recess, seen through the glass
   const it=interiorTexture(b.seed, open?(b.warm||'#ffca7a'):'#8a6a48');
-  const glowMat=new THREE.MeshBasicMaterial({ map:it, color: open?0xffffff:0x5a4a3a });
+  const glowMat=new THREE.MeshBasicMaterial({ map:it, color: open?0xffffff:0x7a6752 });
   regDimBasic(glowMat);
   const glow=new THREE.Mesh(new THREE.PlaneGeometry(W-1.6, GF-1.1), glowMat);
   glow.position.set(fx-dir*(revD-0.08), (GF-1.1)/2+0.55, b.z);
@@ -599,7 +599,31 @@ function buildArch(){
     const brace=new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.09,2.6,8), MAT.blackSteel);
     brace.position.set(px-s*0.75, TOP-0.6, AZ); brace.rotation.z=s*0.6; brace.castShadow=true; g.add(brace);
   }
-  // double red neon tube arc (two parallel tubes, offset in z)
+  // solid red band core: the real 一番街 arch is a solid band, not bare tubes.
+  // (bare separated tubes merge into a band only from the dead-on street view;
+  //  from any oblique angle — or a small phone screen — they resolve into thin
+  //  doodle-like lines. The band keeps the arch solid from every viewpoint;
+  //  the tubes read as neon edging on its faces.)
+  const bandMat=new THREE.MeshBasicMaterial({ color:0xd82626 }); regDimBasic(bandMat);
+  {
+    const cps=[];
+    for(let i=0;i<=24;i++){
+      const t=i/24, x=-PX+2*PX*t;
+      cps.push(new THREE.Vector3(x, 2.6 + (TOP-2.2)*Math.sin(Math.PI*Math.pow(t,0.92)) + 0.15, AZ));
+    }
+    const curve=new THREE.CatmullRomCurve3(cps);
+    const SEG=26;
+    for(let i=0;i<SEG;i++){
+      const p0=curve.getPoint(i/SEG), p1=curve.getPoint((i+1)/SEG);
+      const mid=new THREE.Vector3().addVectors(p0,p1).multiplyScalar(0.5);
+      const seg=new THREE.Mesh(new THREE.BoxGeometry(p0.distanceTo(p1)*1.06, 0.62, 0.72), bandMat);
+      seg.position.copy(mid);
+      seg.rotation.z=Math.atan2(p1.y-p0.y, p1.x-p0.x);
+      seg.castShadow=true;
+      g.add(seg);
+    }
+  }
+  // double red neon tube arc (two parallel tubes, offset in z — neon edging on the band faces)
   for(const dz of [-0.35, 0.35]){
     const pts=[];
     for(let i=0;i<=24;i++){
@@ -610,11 +634,6 @@ function buildArch(){
     const tube=new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 48, 0.14, 10),
       MAT.neonTube);
     g.add(tube);
-    // inner second line of the double-tube look
-    const pts2=pts.map(p=>new THREE.Vector3(p.x, p.y-0.55, p.z));
-    const tube2=new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts2), 48, 0.09, 8),
-      MAT.neonRed);
-    g.add(tube2);
   }
   // center sign panel: dark board, red neon border, warm-white 歌舞伎町一番街
   const [pc,pg]=cnv(1024,220);
@@ -758,7 +777,7 @@ const BUILDINGS=[
    shop:'銀八鮨', shopSub:'GINPACHI SUSHI', fasciaBg:'#123a6a', fasciaFg:'#e8f2ff',
    doorBay:1, warm:'#ffd9a0', closed:true,
    kanban:[ {dz:-3.4,y:6.2,h:3.6,text:'寿司',bg:'#123a6a',fg:'#e8f2ff'} ],
-   wallBoards:[ {dz:2.8,y:7.4,w:2.6,h:0.9,text:'から汁酒場',bg:'#0e141c',fg:'#ffb35e'} ] },
+   wallBoards:[ {dz:2.8,y:7.4,w:2.6,h:0.9,text:'焼鳥酒場',bg:'#0e141c',fg:'#ffb35e'} ] },
  { x:-12.5, dir:1, z:-44, w:14, h:22, stories:6, seed:13, tint:'#20242f',
    shop:'カラオケ館', shopSub:'KARAOKE 24H', fasciaBg:'#a01248', fasciaFg:'#ffe4f0',
    doorBay:3, warm:'#ffc4da',
@@ -785,7 +804,7 @@ const BUILDINGS=[
    shop:'パチンコ', shopSub:'PACHINKO', fasciaBg:'#8a1010', fasciaFg:'#ffe36a',
    doorBay:2, warm:'#ffe9a0',
    kanban:[ {dz:-3.4,y:8.6,h:4.8,text:'パチンコ',bg:'#8a1010',fg:'#ffe36a'},
-            {dz: 3.6,y:7.4,h:3.4,text:'ヒボンバーグ',bg:'#101318',fg:'#ff9a5e'} ] },
+            {dz: 3.6,y:7.4,h:3.4,text:'スロット',bg:'#101318',fg:'#ff9a5e'} ] },
  { x:12.5, dir:-1, z:-42, w:14, h:13, stories:3, seed:23, tint:'#1c2029',
    shop:'焼肉', shopSub:'牛角 GYUKAKU', fasciaBg:'#701818', fasciaFg:'#ffd9a0',
    doorBay:3, noren:'#401010', norenText:'肉',
