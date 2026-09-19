@@ -155,6 +155,29 @@ function baySkylineTexture(){
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
+// distant towers across the bay — DAY face: hazy blue-gray silhouettes (same seed/
+// layout as the night version). Fixes qa-waterfront-daynight: the skyline was
+// hidden outright in day mode instead of showing its day face.
+function baySkylineTextureDay(){
+  const c = document.createElement('canvas'); c.width=2048; c.height=256;
+  const g = c.getContext('2d'), rnd = mulberry32(31);
+  g.clearRect(0,0,2048,256);
+  let x = 0;
+  while(x < 2048){
+    const bw = 50+rnd()*120, bh = 70+rnd()*150;
+    const tone = 118+rnd()*38|0; // hazy blue-gray, varies per tower
+    g.fillStyle = `rgb(${tone-18},${tone},${tone+22})`; g.fillRect(x, 256-bh, bw, bh);
+    for(let wy=256-bh+9; wy<246; wy+=13) for(let wx=x+6; wx<x+bw-6; wx+=11){
+      if(rnd()<0.5){
+        g.fillStyle = `rgba(52,66,88,${0.35+rnd()*0.3})`;
+        g.fillRect(wx, wy, 5, 7);
+      }
+    }
+    x += bw + rnd()*40;
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
 // tower facade: dark concrete + randomized lit windows (warm/cool)
 function towerTexture(seed, warmRatio){
   const c = document.createElement('canvas'); c.width=256; c.height=512;
@@ -175,8 +198,31 @@ function towerTexture(seed, warmRatio){
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
-
-// ---------- Japanese sign textures (real glyphs via embedded subset font) ----------
+// tower facade — DAY face: light concrete + glass grid (same layout as the night
+// texture so the emissive windows line up after dark). Fixes qa-waterfront-daynight:
+// the night texture was used as `map`, so day mode showed near-black facades.
+function towerTextureDay(seed){
+  const c = document.createElement('canvas'); c.width=256; c.height=512;
+  const g = c.getContext('2d'), rnd = mulberry32(seed*7+3);
+  g.fillStyle = '#aeb6c0'; g.fillRect(0,0,256,512);
+  for(let i=0;i<44;i++){ // subtle concrete tonal bands
+    g.fillStyle = rnd()<0.5 ? `rgba(255,255,255,${rnd()*0.06})` : `rgba(20,30,40,${rnd()*0.07})`;
+    g.fillRect(0, rnd()*512, 256, 2+rnd()*9);
+  }
+  g.fillStyle = 'rgba(30,40,52,0.55)'; g.fillRect(0, 0, 256, 10); // roof parapet shadow
+  for(let wy=14; wy<500; wy+=26){
+    for(let wx=12; wx<244; wx+=22){
+      const v = rnd();
+      if(v < 0.12) g.fillStyle = '#8fa8c4';       // sky-reflecting glass
+      else if(v < 0.22) g.fillStyle = '#6a7688'; // pale glass
+      else g.fillStyle = '#39424e';               // standard glass
+      g.fillRect(wx, wy, 13, 15);
+      g.fillStyle = 'rgba(255,255,255,0.28)'; g.fillRect(wx, wy, 13, 2); // top glint
+    }
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
 const SIGN_FONT = '"SignJP","Noto Sans CJK JP",sans-serif';
 async function ensureSignFont(){
   try{
@@ -299,7 +345,8 @@ const skyMat = new THREE.MeshBasicMaterial({ map: skyTexture(true), side: THREE.
 const skyDome = new THREE.Mesh(new THREE.SphereGeometry(900, 32, 20), skyMat);
 skyDome.position.set(60, 0, -60); scene.add(skyDome);
 const daySkyTex = skyTexture(false), nightSkyTex = skyMat.map;
-const baySkylineMat = new THREE.MeshBasicMaterial({ map: baySkylineTexture(), transparent:true, fog:false, depthWrite:false });
+const nightBayTex = baySkylineTexture(), dayBayTex = baySkylineTextureDay();
+const baySkylineMat = new THREE.MeshBasicMaterial({ map: nightBayTex, transparent:true, fog:false, depthWrite:false });
 const baySkyline = new THREE.Mesh(new THREE.PlaneGeometry(1100, 92), baySkylineMat);
 baySkyline.position.set(140, 34, -520); scene.add(baySkyline);
 
@@ -333,7 +380,7 @@ function waterStreak(x, z, tint, w, len, opacity){
     new THREE.MeshBasicMaterial({ map: streakTex, color: tint, transparent:true,
       opacity, blending: THREE.AdditiveBlending, depthWrite:false }));
   m.rotation.x = -Math.PI/2; m.rotation.z = Math.PI;
-  m.position.set(x, -1.9, z); scene.add(m);
+  m.position.set(x, -1.35, z); scene.add(m);   // above the wave crests (max ~-1.55)
   m.userData.nightFx = true; nightFx.push(m);
 }
 function glowSprite(x, y, z, size, color, opacity=0.85){
@@ -358,9 +405,62 @@ function box(w,h,d,mat,x,y,z,ry=0){
   scene.add(m); return m;
 }
 
-// ---------- water ----------
-const water = new THREE.Mesh(new THREE.PlaneGeometry(1600, 1600),
-  new THREE.MeshStandardMaterial({ color:0x14253f, roughness:0.18, metalness:0.55 }));
+// ---------- water: animated — vertex waves + scrolling city-light reflections ----------
+// cheap showroom water: no reflector; gentle sine displacement + analytic normals,
+// fresnel sky reflection and warm/cool city glow bands in the fragment shader.
+const waterUniforms = { uTime: { value: 0 }, uNight: { value: 1 } };
+const waterMat = new THREE.MeshStandardMaterial({ color: 0x0f2f57, roughness: 0.3, metalness: 0.08 });
+waterMat.onBeforeCompile = (sh) => {
+  sh.uniforms.uTime = waterUniforms.uTime;
+  sh.uniforms.uNight = waterUniforms.uNight;
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', `#include <common>
+      uniform float uTime;
+      varying vec3 vWPos;`)
+    .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
+      {
+        // analytic wave normal: h = 0.25*sin(a1)*sin(b1) + 0.20*sin(a2)
+        float t = uTime;
+        float px = position.x, py = position.y;
+        float a1 = px*0.080 + t*1.15, b1 = py*0.060 - t*0.85;
+        float a2 = (px+py)*0.021 - t*0.55;
+        float dhx = 0.25*0.080*cos(a1)*sin(b1) + 0.20*0.021*cos(a2);
+        float dhy = 0.25*0.060*sin(a1)*cos(b1) + 0.20*0.021*cos(a2);
+        objectNormal = normalize(vec3(-dhx, -dhy, 1.0));
+      }`)
+    .replace('#include <begin_vertex>', `#include <begin_vertex>
+      {
+        float t = uTime;
+        float w1 = sin(position.x*0.080 + t*1.15) * sin(position.y*0.060 - t*0.85);
+        float w2 = sin((position.x+position.y)*0.021 - t*0.55);
+        transformed.z += w1*0.25 + w2*0.20;   // local +z == world +y after rotateX(-90)
+      }
+      vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`);
+  sh.fragmentShader = sh.fragmentShader
+    .replace('#include <common>', `#include <common>
+      uniform float uTime;
+      uniform float uNight;
+      varying vec3 vWPos;`)
+    .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      {
+        vec3 Vv = normalize(vViewPosition);
+        vec3 Nn = normalize(normal);
+        float fres = pow(1.0 - clamp(dot(Nn, Vv), 0.0, 1.0), 2.0);
+        // fine ripple sparkle riding on the swell
+        float rip = sin(vWPos.x*0.55 + uTime*1.9) * sin(vWPos.z*0.47 - uTime*1.6);
+        float rip2 = sin((vWPos.x+vWPos.z)*0.23 - uTime*1.1);
+        float sparkle = smoothstep(0.75, 1.0, rip*rip2);
+        // city light reflections: warm band off the Odaiba towers (+x), cool pool under the bridge
+        float warmBand = exp(-abs(vWPos.z - 80.0)/260.0) * smoothstep(40.0, 300.0, vWPos.x);
+        float coolBand = exp(-distance(vWPos.xz, vec2(185.0, -230.0))/200.0);
+        vec3 cityGlow = (vec3(1.0,0.52,0.22)*warmBand*0.55 + vec3(0.40,0.60,1.0)*coolBand*0.50) * uNight;
+        vec3 skyRef = mix(vec3(0.10,0.23,0.38), vec3(0.02,0.04,0.09), uNight);
+        totalEmissiveRadiance += skyRef * (0.25 + 0.75*fres)
+          + cityGlow * (0.30 + 0.70*fres)
+          + vec3(0.90,0.95,1.0) * sparkle * (0.25 + 0.75*uNight) * 0.35;
+      }`);
+};
+const water = new THREE.Mesh(new THREE.PlaneGeometry(1600, 1600, 110, 110), waterMat);
 water.rotation.x = -Math.PI/2; water.position.set(60, -2, -120);
 water.receiveShadow = true; scene.add(water);
 
@@ -401,6 +501,112 @@ function buildRoad(){
     const seg = box(ROAD_W+0.6, 1.7, (R*(TH1-TH0))/N*4+0.4, girderMat, c.x, DECK-1.05, c.z);
     seg.rotation.y = Math.atan2(t.x, t.z);
   }
+}
+// ---------- approach ramp: road curve -> Rainbow Bridge deck (qa-waterfront-bridge-gap) ----------
+// The road ribbon ends at th=TH1 (122.4, 8, -44.7); the bridge deck end face sits at
+// (185, 12.9..15.1, -80). This ramp closes the gap: its first cross-section is pinned
+// EXACTLY to the road's end edge (shared vertices, zero seam) and its last cross-section
+// is pinned to the deck end face at deck-top height (15.1). Parapets, lane markings,
+// box girder and a pier continue the road's language onto the bridge — nothing floats.
+function buildApproach(){
+  const hw = ROAD_W/2;
+  const c0 = P(TH1), n0 = NRM(TH1), t0 = TAN(TH1);
+  const deckTopY = BR.deckY + 1.1; // 15.1 — bridge deck box top
+  const ctrl = [
+    P(TH1-0.06),                                             // tangent keeper behind the joint
+    c0.clone(),                                              // == road end (pinned below)
+    new THREE.Vector3(c0.x + t0.x*20, 8.1, c0.z + t0.z*20),  // run out along the road tangent
+    new THREE.Vector3(161, 10.6, -70.5),                     // climb + bend toward the bridge axis
+    new THREE.Vector3(177, 13.4, -75),
+    new THREE.Vector3(BR.x, deckTopY, -80),                  // == deck end face (pinned below)
+    new THREE.Vector3(BR.x, deckTopY, -95),                  // tangent keeper inside the deck
+  ];
+  const curve = new THREE.CatmullRomCurve3(ctrl, false, 'catmullrom');
+  const M = 48, tA = 1/6, tB = 5/6; // sample ctrl[1]..ctrl[5]
+  const up = new THREE.Vector3(0,1,0);
+  const posA = [], uvA = [], idxA = [], frames = [];
+  let vCoord = (R*(TH1-TH0))/7, prevP = null; // continue the road's asphalt v coordinate
+  for(let i=0;i<=M;i++){
+    const t = tA + (tB-tA)*i/M;
+    const p = curve.getPoint(t);
+    let tan, lat, cx, cy, cz;
+    if(i===0){ tan = t0.clone(); lat = n0.clone(); cx = c0.x; cy = DECK; cz = c0.z; }
+    else if(i===M){ tan = new THREE.Vector3(0,0,-1); lat = new THREE.Vector3(1,0,0); cx = BR.x; cy = deckTopY; cz = -80; }
+    else {
+      tan = curve.getTangent(t);
+      lat = new THREE.Vector3().crossVectors(tan, up).normalize();
+      cx = p.x; cy = p.y; cz = p.z;
+    }
+    posA.push(cx - lat.x*hw, cy, cz - lat.z*hw,  cx + lat.x*hw, cy, cz + lat.z*hw);
+    const pc = new THREE.Vector3(cx, cy, cz);
+    if(prevP) vCoord += prevP.distanceTo(pc)/7;
+    prevP = pc;
+    uvA.push(0, vCoord, 1, vCoord);
+    frames.push({ p: pc, tan, lat });
+    if(i<M){ const a=i*2; idxA.push(a, a+1, a+2, a+1, a+3, a+2); }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(posA, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uvA, 2));
+  g.setIndex(idxA); g.computeVertexNormals();
+  const ramp = new THREE.Mesh(g, roadMat);
+  ramp.receiveShadow = true; scene.add(ramp);
+  // lane markings continue onto the ramp (start one sample in: the road's own
+  // markings already reach the joint edge)
+  const markMat2 = new THREE.MeshBasicMaterial({ color:0xdfe6ee });
+  function rampStrip(off, w, dashLen, gapLen){
+    let d = 0;
+    for(let i=1;i<frames.length-1;i++){
+      const f = frames[i];
+      const segLen = f.p.distanceTo(frames[i+1].p);
+      if(dashLen && (d % (dashLen+gapLen)) > dashLen){ d += segLen; continue; }
+      const len = dashLen ? Math.min(dashLen - (d % (dashLen+gapLen)), segLen) : segLen;
+      const geo = new THREE.PlaneGeometry(w, len+0.05); geo.rotateX(-Math.PI/2);
+      const m = new THREE.Mesh(geo, markMat2);
+      m.rotation.y = Math.atan2(f.tan.x, f.tan.z) + Math.PI;
+      m.position.set(f.p.x + f.lat.x*off, f.p.y+0.03, f.p.z + f.lat.z*off);
+      scene.add(m); d += segLen;
+    }
+  }
+  rampStrip(-5.9, 0.16); rampStrip(5.9, 0.16);
+  rampStrip(-1.8, 0.15, 3, 6); rampStrip(1.8, 0.15, 3, 6);
+  // parapets + water-side rail (skip the first pair: the road's own parapets stand at the joint)
+  const parGeo = new THREE.BoxGeometry(0.55, 1.05, 4.35);
+  const railGeo = new THREE.BoxGeometry(0.14, 0.14, 4.35);
+  for(let i=2;i<frames.length;i+=2){
+    const f = frames[i];
+    const yaw = Math.atan2(f.tan.x, f.tan.z);
+    for(const side of [-1, 1]){
+      const px = f.p.x + f.lat.x*(hw-0.35)*side, pz = f.p.z + f.lat.z*(hw-0.35)*side;
+      const par = new THREE.Mesh(parGeo, concreteMat);
+      par.position.set(px, f.p.y+0.52, pz); par.rotation.y = yaw;
+      par.castShadow = true; par.receiveShadow = true; scene.add(par);
+      if(side<0){
+        const r = new THREE.Mesh(railGeo, steelMat);
+        r.position.set(px, f.p.y+1.28, pz); r.rotation.y = yaw; scene.add(r);
+      }
+    }
+  }
+  // box girder under the ramp (starts past the joint: the road's end girder is there)
+  const girderMat2 = new THREE.MeshStandardMaterial({ color:0x2b2f36, roughness:0.8 });
+  for(let i=6;i<frames.length;i+=6){
+    const f = frames[i], fn = frames[Math.min(i+6, frames.length-1)];
+    const yaw = Math.atan2(f.tan.x, f.tan.z);
+    const segm = new THREE.Mesh(new THREE.BoxGeometry(ROAD_W+0.6, 1.7, f.p.distanceTo(fn.p)+0.4), girderMat2);
+    segm.position.set(f.p.x, f.p.y-1.05, f.p.z); segm.rotation.y = yaw;
+    segm.castShadow = true; scene.add(segm);
+  }
+  // pier under the ramp mid-span, footing on the anchor cape (top y=1.0) — nothing floats
+  const pf = frames[30];
+  const pyaw = Math.atan2(pf.tan.x, pf.tan.z);
+  const pierMat2 = new THREE.MeshStandardMaterial({ color:0x4a4f57, roughness:0.85 });
+  const crossY = pf.p.y - 2.6;
+  const cross = new THREE.Mesh(new THREE.BoxGeometry(11, 1.4, 3.2), pierMat2);
+  cross.position.set(pf.p.x, crossY, pf.p.z); cross.rotation.y = pyaw;
+  cross.castShadow = true; scene.add(cross);
+  const colH = (crossY - 0.7) - 1.0;
+  const col = new THREE.Mesh(new THREE.BoxGeometry(2.4, colH, 2.4), pierMat2);
+  col.position.set(pf.p.x, 1.0 + colH/2, pf.p.z); col.castShadow = true; scene.add(col);
 }
 // lane markings: solid edge lines + dashed dividers + painted arrows
 function buildMarkings(){
@@ -576,9 +782,10 @@ function buildTowers(){
     [158, 162, 28, 24, 76, 17, 0.5],
   ];
   for(const [x, z, w, d, h, seed, warm] of defs){
-    const tex = towerTexture(seed, warm);
-    const mat = new THREE.MeshStandardMaterial({ map: tex, emissive:0xffffff,
-      emissiveMap: tex, emissiveIntensity:0.85, roughness:0.85 });
+    const nightTex = towerTexture(seed, warm);
+    // day face as `map`, night face as `emissiveMap` — day/night parity (qa-waterfront-daynight)
+    const mat = new THREE.MeshStandardMaterial({ map: towerTextureDay(seed),
+      emissive:0xffffff, emissiveMap: nightTex, emissiveIntensity:0.85, roughness:0.85 });
     towerMats.push(mat);
     const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
     m.position.set(x, h/2, z); m.castShadow = true; m.receiveShadow = true; scene.add(m);
@@ -766,9 +973,11 @@ function setNight(on){
     bridgeLights.forEach(p=>p.intensity=110);
     if(lampHeadMat) lampHeadMat.emissiveIntensity = 2.6;
     renderer.toneMappingExposure=1.38;
-    skyMat.map = nightSkyTex; baySkyline.visible = true;
+    skyMat.map = nightSkyTex;
+    baySkylineMat.map = nightBayTex; baySkylineMat.needsUpdate = true; baySkyline.visible = true;
     nightFx.forEach(m=>m.visible=true);
-    towerMats.forEach(m=>m.emissiveIntensity=0.85);
+    towerMats.forEach(m=>{ m.emissiveIntensity=0.85; m.color.set(0x232a35); }); // dim the day map after dark
+    waterUniforms.uNight.value = 1;
     if(roadMat) roadMat.color.setRGB(1,1,1);
   } else {
     scene.background.set(0x9fc3e8); scene.fog.color.set(0x9fc3e8);
@@ -778,9 +987,11 @@ function setNight(on){
     bridgeLights.forEach(p=>p.intensity=0);
     if(lampHeadMat) lampHeadMat.emissiveIntensity = 0.15;
     renderer.toneMappingExposure=1.0;
-    skyMat.map = daySkyTex; baySkyline.visible = false;
+    skyMat.map = daySkyTex;
+    baySkylineMat.map = dayBayTex; baySkylineMat.needsUpdate = true; baySkyline.visible = true;
     nightFx.forEach(m=>m.visible=false);
-    towerMats.forEach(m=>m.emissiveIntensity=0.0);
+    towerMats.forEach(m=>{ m.emissiveIntensity=0.0; m.color.set(0xffffff); }); // full day facades
+    waterUniforms.uNight.value = 0;
     if(roadMat) roadMat.color.setRGB(1.7,1.7,1.7); // lift the asphalt out of the dark in daylight
   }
   skyMat.needsUpdate = true;
@@ -837,6 +1048,7 @@ async function build(){
   await ensureSignFont();
   buildRoad();
   buildMarkings();
+  buildApproach(); // road -> bridge deck: close the qa-waterfront-bridge-gap
   buildParapetsAndPiers();
   buildLamps();
   buildBridge();
@@ -864,6 +1076,7 @@ async function build(){
 
 let shotFrames = 0;
 function loop(t){
+  waterUniforms.uTime.value = (t||0)*0.001; // drive the water waves
   if(SHOT && window.__we.ready && ++shotFrames > 12){
     document.title = 'WE-SHOT-READY';
     return; // stop: deterministic frame for screenshots
@@ -916,18 +1129,6 @@ build().then(()=>{
   window.__we.error = String(err);
 });
 loop();
-</script>
-<!-- TD cross-district nav (showroom update) -->
-<style>
-#tdnav{position:fixed;left:50%;bottom:12px;transform:translateX(-50%);z-index:20;display:flex;align-items:center;white-space:nowrap;background:rgba(8,10,16,.8);border:1px solid rgba(120,200,255,.28);border-radius:10px;padding:4px 6px;font:12px/1.4 system-ui,sans-serif;backdrop-filter:blur(6px);max-width:97vw;overflow-x:auto}
-#tdnav a{color:#9fd8ff;text-decoration:none;padding:4px 7px;border-radius:6px;opacity:.85;flex:0 0 auto}
-#tdnav a:hover{background:rgba(88,166,255,.2);opacity:1}
-#tdnav a.cur{background:rgba(88,166,255,.3);color:#fff;font-weight:700;opacity:1}
-#tdnav .sep{color:#445066;user-select:none;flex:0 0 auto}
-</style>
-<nav id="tdnav" aria-label="Tokyo Drift scenes"></nav>
-<script>
-(function(){var p=[["index.html","Game"],["districts.html","Dashboard"],["fh6-scene.html","Night Street"],["startplaza-scene.html","Start Plaza"],["district2-scene.html","Industrial Dock"],["south-ridge-scene.html","South Ridge"],["waterfront-east-scene.html","Waterfront East"],["the-climb-scene.html","The Climb"],["harborwest-scene.html","Harbor West"]];var cur=(location.pathname.split("/").pop()||"index.html").toLowerCase();var nav=document.getElementById("tdnav");var h="";for(var i=0;i<p.length;i++){if(i>0)h+='<span class="sep">\u00b7</span>';h+='<a href="'+p[i][0]+'"'+(p[i][0].toLowerCase()===cur?' class="cur"':'')+'>'+p[i][1]+"</a>";}nav.innerHTML=h;})();
 </script>
 </body>
 </html>
