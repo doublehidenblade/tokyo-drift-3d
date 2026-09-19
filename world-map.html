@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tokyo Drift 3D — World Map + Makeover Blueprint (scene + blueprint = world)</title>
+<style>
+  :root{ --bg:#0b0d12; --card:#141824; --line:#232a3d; --txt:#e8ecf4; --dim:#8b94a8; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  header{padding:24px 24px 4px;max-width:1200px;margin:0 auto}
+  h1{margin:0 0 6px;font-size:24px}
+  .sub{color:var(--dim);font-size:14px;margin:0 0 12px;max-width:900px;line-height:1.5}
+  .wrap{max-width:1200px;margin:0 auto;padding:0 24px 24px;display:grid;
+        grid-template-columns:minmax(0,1fr) 300px;gap:18px}
+  @media (max-width:900px){ .wrap{grid-template-columns:1fr} }
+  .mapbox{background:var(--card);border:1px solid var(--line);border-radius:12px;
+          padding:8px}
+  svg{width:100%;height:auto;display:block}
+  .side{display:flex;flex-direction:column;gap:10px}
+  .legend{background:var(--card);border:1px solid var(--line);border-radius:12px;
+          padding:14px 16px;font-size:13px;line-height:1.9}
+  .legend b{font-size:14px}
+  .note{background:var(--card);border:1px solid var(--line);border-radius:12px;
+        padding:14px 16px;font-size:13px;color:var(--dim);line-height:1.6}
+  .note b{color:var(--txt)}
+  .sw{display:inline-block;width:14px;height:4px;border-radius:2px;margin-right:8px;
+      vertical-align:middle}
+  a.pinlink{color:#9ecbff}
+  .mke{background:var(--card);border:1px solid var(--line);border-radius:12px;
+        padding:14px 16px;font-size:12.5px;color:var(--dim);line-height:1.65}
+  .mke b{color:var(--txt);font-size:13px}
+  .mke .id{color:#ff9ecb;font-weight:bold}
+</style>
+</head>
+<body>
+<header>
+  <h1>Tokyo Drift 3D — World Map + Makeover Blueprint</h1>
+  <p class="sub">Proof that <b>scene + city-blueprint = world</b>: the 5,227&nbsp;m race loop
+  (from <span style="font-family:monospace">src/track.js</span>) with the 7 published showroom scenes pinned
+  at their blueprint districts. Click a pin to open its live scene. Dashed amber = district with
+  <b>no showroom scene yet</b>. <b>Magenta overlays = makeover phase-2 elements</b> (EVA/Akira/retro,
+  Craig 2026-09-19): wire runs, pedestrian overpasses, the EVA-style lit train, and tower-density
+  bands. Per-district delivery status is in the legend: 🟢 scene live · 🟡 fix in flight ·
+  🔴 no scene. Read-only schematic — not to scale for art.</p>
+</header>
+<div class="wrap">
+  <div class="mapbox"><svg id="map" viewBox="0 0 1000 860" role="img"
+      aria-label="Top-down map of the Tokyo Drift 3D city blueprint with scene pins and makeover overlays"></svg></div>
+  <div class="side">
+    <div class="legend" id="legend"><b>Districts — delivery status</b><br></div>
+    <div class="mke" id="mke"><b>Makeover phase 2 (EVA/Akira/retro)</b><br>
+      <span class="id">MKE-1</span> utility poles + catenary wire density (EVA-style)<br>
+      <span class="id">MKE-2</span> pedestrian overpasses w/ Japanese signage (Tokyo-3)<br>
+      <span class="id">MKE-3</span> elevated curving rail + lit red/white train (EVA-02)<br>
+      <span class="id">MKE-4</span> tower window-grid density (Akira-style)<br>
+      <span class="id">MKE-5</span> color grading: deep-blue night / sodium orange / teal (global)<br>
+      <span class="id">MKE-6</span> traffic variety: civilian cars, lane changes, blinkers (game-side)<br>
+      <span class="id">MKE-7</span> city verticality: MultiMesh skyline bands, fog separation<br>
+      <span class="id">MKE-8</span> stylized sky: gradient + stars + hero moon (phone-safe)<br>
+      <br><b>Packs:</b> Elegant Crow skyscrapers + GDQuest sky approved for v3;
+      Quaternius Downtown <b>vetoed</b> (too Western); Quaternius Nature kept for vegetation.
+    </div>
+    <div class="note"><b>How to read it.</b> The colored loop is the race circuit; each color is a
+    blueprint district. Pins sit at each district's anchor point on the real track coordinates.
+    The bay, suspension bridge, tunnel, elevated expressway and air-train loop are drawn from
+    <span style="font-family:monospace">CITY_PLAN.md</span> dimensions. Magenta overlays show where
+    makeover-phase-2 elements land. Full analysis:
+    <span style="font-family:monospace">docs/planning/WORLD_MAP.md</span>.</div>
+  </div>
+</div>
+<script>
+// ---------- ground truth: track control points [x,y,z], closed loop ----------
+const CP = [
+  [0,0,0],[0,0,470],[50,1,860],[230,5,1170],[510,13,1370],[820,20,1440],
+  [1130,16,1370],[1330,6,1090],[1390,2,740],[1290,0,430],[1340,-2,120],
+  [1170,-3,-200],[860,-3,-330],[550,0,-300],[230,1,-160]
+];
+const L = 5227;
+// districts: [name, s0, s1, color, anchorX, anchorZ, sceneUrl, sceneLabel, note, status]
+// status: live | fix | gap
+const DIST = [
+  ["Start Plaza · commercial", 4941, 5227, "#7c5cff", 0, 0,
+   "https://doublehidenblade.github.io/tokyo-drift-3d/startplaza-scene.html","Start Plaza","start/finish gantry","live"],
+  ["Start Plaza · commercial", 0, 470, "#7c5cff", 0, 0, null, null, null, null],
+  ["Harbor West · cargo port", 470, 1235, "#3aa0ff", 50, 860,
+   "https://doublehidenblade.github.io/tokyo-drift-3d/harborwest-scene.html","Harbor West","west shore","fix"],
+  ["The Climb · hillside", 1235, 1502, "#3ddc84", 370, 1270,
+   "https://doublehidenblade.github.io/tokyo-drift-3d/the-climb-scene.html","The Climb","climbing grade","fix"],
+  ["Bay Strait + bridge", 1502, 2285, "#ffb454", 820, 1440, null, "NO SCENE",
+   "bridge district — no showroom scene yet","gap"],
+  ["Waterfront East · bayshore", 2285, 2573, "#ff6b9d", 1230, 1230,
+   "https://doublehidenblade.github.io/tokyo-drift-3d/waterfront-east-scene.html","Waterfront East","east shore","fix"],
+  ["Downtown · neon core", 2573, 3573, "#ff3d5a", 1390, 740,
+   "https://doublehidenblade.github.io/tokyo-drift-3d/fh6-scene.html","FH6 Night Street","hero-district stand-in","gap"],
+  ["South Ridge + tunnel", 3533, 4318, "#8b94a8", 1340, 120,
+   "https://doublehidenblade.github.io/tokyo-drift-3d/south-ridge-scene.html","South Ridge","tunnel entrance","live"],
+  ["Industrial Edge", 4318, 4941, "#ff8c42", 550, -300,
+   "https://doublehidenblade.github.io/tokyo-drift-3d/district2-scene.html","District 2 · Industrial Dock","landlocked dock","live"],
+];
+const STATUS_GLYPH = { live:"🟢", fix:"🟡", gap:"🔴" };
+// map projection: x -> right, z -> up
+const X0=-450, X1=1650, Z0=-650, Z1=2450, W=1000, H=860;
+const sx = W/(X1-X0), sz = H/(Z1-Z0);
+const X = x => (x-X0)*sx, Y = z => H-(z-Z0)*sz;
+// Catmull-Rom sample of closed loop (x,z)
+function sample(n){
+  const pts=[]; const m=CP.length;
+  const P=i=>CP[(i+m)%m];
+  for(let k=0;k<m;k++){
+    const p0=P(k-1),p1=P(k),p2=P(k+1),p3=P(k+2);
+    for(let j=0;j<n;j++){
+      const t=j/n, t2=t*t, t3=t2*t;
+      const f=(a,b,c,d)=>0.5*((2*b)+(-a+c)*t+(2*a-5*b+4*c-d)*t2+(-a+3*b-3*c+d)*t3);
+      pts.push([f(p0[0],p1[0],p2[0],p3[0]), f(p0[2],p1[2],p2[2],p3[2])]);
+    }
+  }
+  return pts;
+}
+const PTS = sample(24);
+// cumulative s along samples, scaled to L
+const cum=[0];
+for(let i=1;i<=PTS.length;i++){
+  const a=PTS[i-1], b=PTS[i%PTS.length];
+  cum.push(cum[i-1]+Math.hypot(b[0]-a[0],b[1]-a[1]));
+}
+const scale=L/cum[PTS.length];
+const NS='http://www.w3.org/2000/svg';
+const svg=document.getElementById('map');
+function el(tag,attrs,parent){const e=document.createElementNS(NS,tag);
+  for(const k in attrs)e.setAttribute(k,attrs[k]);(parent||svg).appendChild(e);return e;}
+function txt(x,y,s,attrs){const e=el('text',Object.assign({x:X(x),y:Y(y),
+  'font-size':13,fill:'#e8ecf4','text-anchor':'middle','font-family':'sans-serif'},attrs||{}));
+  e.textContent=s;return e;}
+
+// bay: x[500,1180] z[1000,2260]
+el('rect',{x:X(500),y:Y(2260),width:(1180-500)*sx,height:(2260-1000)*sz,fill:'#0e2a4a',
+  stroke:'#2b6cb0','stroke-width':1.5,rx:6});
+txt(840,1630,'TOKYO BAY',{fill:'#7fb3e8','font-size':16,'letter-spacing':'4'});
+// far north shore quay
+el('line',{x1:X(500),y1:Y(2260),x2:X(1180),y2:Y(2260),stroke:'#8b94a8','stroke-width':3});
+txt(840,2320,'far shore quay + 4 port cranes',{fill:'#8b94a8','font-size':11});
+// bridge: (510,1370)->(1130,1370) over bay
+el('line',{x1:X(510),y1:Y(1370),x2:X(1130),y2:Y(1370),stroke:'#ffb454','stroke-width':5,
+  'stroke-dasharray':'10 6'});
+txt(820,1420,'suspension bridge (apex y=20)',{fill:'#ffb454','font-size':11});
+// tunnel: (1340,120)->(1170,-200)->(860,-330)
+el('polyline',{points:`${X(1340)},${Y(120)} ${X(1170)},${Y(-200)} ${X(860)},${Y(-330)}`,
+  fill:'none',stroke:'#8b94a8','stroke-width':5,'stroke-dasharray':'8 6'});
+txt(1080,-260,'tunnel (y≈−3)',{fill:'#8b94a8','font-size':11});
+// elevated expressway: z=860, x[-300,1100]
+el('line',{x1:X(-300),y1:Y(860),x2:X(1100),y2:Y(860),stroke:'#3aa0ff','stroke-width':2.5,
+  'stroke-dasharray':'14 8',opacity:.85});
+txt(400,905,'elevated expressway y=15',{fill:'#3aa0ff','font-size':11});
+// air-train loop: x[1120,1520] z[480,1120]
+el('rect',{x:X(1120),y:Y(1120),width:(1520-1120)*sx,height:(1120-480)*sz,fill:'none',
+  stroke:'#3ddc84','stroke-width':2,'stroke-dasharray':'6 5',rx:10});
+txt(1320,1070,'air-train loop y=13',{fill:'#3ddc84','font-size':11});
+
+// ---------- makeover phase-2 layer (magenta) ----------
+const MK='#ff9ecb';
+// MKE-1: utility wire runs along streets
+el('line',{x1:X(-26),y1:Y(460),x2:X(-26),y2:Y(-150),stroke:MK,'stroke-width':1.6,
+  'stroke-dasharray':'7 5',opacity:.8});
+txt(-52,-170,'MKE-1 wire run',{fill:MK,'font-size':10});
+el('line',{x1:X(1460),y1:Y(1050),x2:X(1460),y2:Y(480),stroke:MK,'stroke-width':1.6,
+  'stroke-dasharray':'7 5',opacity:.8});
+txt(1490,460,'MKE-1',{fill:MK,'font-size':10});
+// MKE-2: pedestrian overpasses (green truss markers)
+for(const [ox,oz,label] of [[0,-100,'MKE-2 overpass'],[1345,590,'MKE-2 overpass']]){
+  el('rect',{x:X(ox-16),y:Y(oz+3),width:32*sx,height:6*sz,fill:'#1c5a3c',
+    stroke:'#3ddc84','stroke-width':1.5});
+  txt(ox,oz+34,label,{fill:'#3ddc84','font-size':10});
+}
+// MKE-3: lit red/white train on the air-train loop
+el('circle',{cx:X(1330),cy:Y(800),r:6,fill:'#e33',stroke:'#fff','stroke-width':2});
+txt(1425,800,'MKE-3 lit train',{fill:MK,'font-size':10});
+// MKE-4/MKE-7: tower density bands (translucent)
+el('rect',{x:X(1150),y:Y(1050),width:(1650-1150)*sx,height:(1050-450)*sz,fill:'#ff9ecb',
+  opacity:0.08,stroke:MK,'stroke-width':1.2,'stroke-dasharray':'4 4'});
+txt(1400,1085,'MKE-4/7 tower density band — Downtown',{fill:MK,'font-size':10});
+el('rect',{x:X(500),y:Y(2450),width:(1180-500)*sx,height:(2450-2200)*sz,fill:'#ff9ecb',
+  opacity:0.08,stroke:MK,'stroke-width':1.2,'stroke-dasharray':'4 4'});
+txt(840,2470,'MKE-4/7 skyline band — far shore',{fill:MK,'font-size':10});
+
+// district-colored track
+function colorAt(s){
+  for(const d of DIST){ if(s>=d[1]&&s<d[2]) return d[3]; }
+  return '#fff';
+}
+for(let i=0;i<PTS.length;i++){
+  const a=PTS[i], b=PTS[(i+1)%PTS.length];
+  const s=cum[i]*scale;
+  el('line',{x1:X(a[0]),y1:Y(a[1]),x2:X(b[0]),y2:Y(b[1]),
+    stroke:colorAt(s),'stroke-width':6,'stroke-linecap':'round'});
+}
+// start/finish marker
+el('circle',{cx:X(0),cy:Y(0),r:7,fill:'#fff',stroke:'#0b0d12','stroke-width':2});
+txt(0,60,'START / FINISH  s=0',{fill:'#fff','font-size':11});
+// pins
+const seen=new Set();
+for(const d of DIST){
+  const key=d[0];
+  if(seen.has(key)) continue; seen.add(key);
+  const [name,, ,color,ax,az,url,label,note,status]=d;
+  const g=el('g',{});
+  if(url){
+    const a=document.createElementNS(NS,'a');
+    a.setAttribute('href',url); a.setAttribute('target','_blank'); g.appendChild(a);
+    const c=el('circle',{cx:X(ax),cy:Y(az),r:11,fill:color,stroke:'#0b0d12',
+      'stroke-width':3,style:'cursor:pointer'},a);
+    const t=el('text',{x:X(ax),y:Y(az)+34,'font-size':12,fill:'#e8ecf4',
+      'text-anchor':'middle','font-family':'sans-serif',style:'cursor:pointer'},a);
+    t.textContent=(STATUS_GLYPH[status]||'')+' '+label;
+    const u=el('text',{x:X(ax),y:Y(az)+48,'font-size':10,fill:'#8b94a8',
+      'text-anchor':'middle','font-family':'sans-serif'},a);
+    u.textContent=note;
+  } else {
+    el('circle',{cx:X(ax),cy:Y(az),r:13,fill:'none',stroke:color,'stroke-width':2.5,
+      'stroke-dasharray':'5 4'},g);
+    const t=el('text',{x:X(ax),y:Y(az)+34,'font-size':12,fill:'#ffb454',
+      'text-anchor':'middle','font-family':'sans-serif','font-weight':'bold'},g);
+    t.textContent='🔴 NO SCENE';
+    const u=el('text',{x:X(ax),y:Y(az)+48,'font-size':10,fill:'#8b94a8',
+      'text-anchor':'middle','font-family':'sans-serif'},g);
+    u.textContent=note;
+  }
+}
+// north arrow + scale
+txt(1560,2300,'N ↑',{fill:'#8b94a8','font-size':12});
+el('line',{x1:X(1300),y1:Y(-560),x2:X(1800),y2:Y(-560),stroke:'#8b94a8','stroke-width':2});
+txt(1550,-600,'500 m',{fill:'#8b94a8','font-size':11});
+
+// legend
+const lg=document.getElementById('legend');
+for(const d of DIST){
+  if(d[5]===0&&d[6]===null) continue; // skip duplicate start-plaza band row
+  const row=document.createElement('div');
+  const hasScene=!!d[6];
+  const glyph=STATUS_GLYPH[d[9]]||'';
+  row.innerHTML=`<span class="sw" style="background:${d[3]}"></span>${glyph} ${d[0]} `+
+    (hasScene?`<a class="pinlink" href="${d[6]}" target="_blank">${d[7]}</a>`
+             :`<b style="color:#ffb454">${d[7]}</b>`);
+  lg.appendChild(row);
+}
+</script>
+</body>
+</html>
