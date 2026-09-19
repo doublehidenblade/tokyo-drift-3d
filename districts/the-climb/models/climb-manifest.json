@@ -1,0 +1,31 @@
+{
+ "scene": "the-climb v2",
+ "units": "meters",
+ "notes": "winding climbing road; houses on terraced pads; harbor south/west",
+ "files": [
+  "centerline.json",
+  "cl-cone.glb",
+  "cl-harbor.glb",
+  "cl-house-a.glb",
+  "cl-house-b.glb",
+  "cl-house-c.glb",
+  "cl-kanban-green.glb",
+  "cl-kanban-orange.glb",
+  "cl-kanban-red.glb",
+  "cl-lamp.glb",
+  "cl-ped.glb",
+  "cl-pine.glb",
+  "cl-pole.glb",
+  "cl-retwalls.glb",
+  "cl-road.glb",
+  "cl-roadmarkings.glb",
+  "cl-rock.glb",
+  "cl-sedan.glb",
+  "cl-sento.glb",
+  "cl-shop.glb",
+  "cl-stairs.glb",
+  "cl-terrain.glb",
+  "climb-manifest.json",
+  "placements.json"
+ ]
+}

@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tokyo Drift 3D — District Wave Status</title>
+<style>
+  :root{ --bg:#0b0d12; --card:#141824; --line:#232a3d; --txt:#e8ecf4; --dim:#8b94a8;
+         --green:#3ddc84; --amber:#ffb454; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  header{padding:28px 24px 8px;max-width:1200px;margin:0 auto}
+  h1{margin:0 0 6px;font-size:26px;letter-spacing:.5px}
+  .sub{color:var(--dim);font-size:14px;margin:0 0 4px}
+  .updated{color:var(--dim);font-size:12px;margin:0}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));
+        gap:18px;padding:20px 24px 40px;max-width:1200px;margin:0 auto}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+        overflow:hidden;display:flex;flex-direction:column}
+  .card .banner{position:relative}
+  .card img.hero{width:100%;display:block;aspect-ratio:16/9;object-fit:cover;
+        background:#000}
+  .badge{position:absolute;top:10px;left:10px;padding:5px 10px;border-radius:999px;
+         font-size:12px;font-weight:700;letter-spacing:.3px}
+  .badge.ok{background:rgba(61,220,132,.16);color:var(--green);
+            border:1px solid rgba(61,220,132,.5)}
+  .badge.busy{background:rgba(255,180,84,.14);color:var(--amber);
+            border:1px solid rgba(255,180,84,.5)}
+  .body{padding:14px 16px 16px;display:flex;flex-direction:column;gap:8px;flex:1}
+  .name{font-size:18px;font-weight:700;margin:0}
+  .type{color:var(--dim);font-size:13px;margin:0}
+  .shots{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px}
+  .shots img{width:100%;border-radius:8px;border:1px solid var(--line);
+             display:block;aspect-ratio:16/9;object-fit:cover;background:#000}
+  .shots figure{margin:0}
+  .shots figcaption{font-size:11px;color:var(--dim);padding:4px 2px 0}
+  .note{font-size:13px;color:var(--dim);margin:6px 0 0}
+  .play{display:inline-block;margin-top:10px;padding:9px 16px;border-radius:8px;
+        background:#7c5cff;color:#fff;text-decoration:none;font-weight:700;
+        font-size:14px;text-align:center}
+  .play:hover{background:#8d6fff}
+  footer{max-width:1200px;margin:0 auto;padding:0 24px 32px;color:var(--dim);
+         font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🏁 Tokyo Drift 3D — District Wave</h1>
+  <p class="sub">Per-district build status. Refresh this page — new districts land here as they verify.</p>
+  <p class="updated">Last updated: Sep 19, 2026 · 4 districts verified</p>
+</header>
+
+<div class="grid">
+
+  <!-- FH6 — verified -->
+  <section class="card">
+    <div class="banner">
+      <img class="hero" src="districts/fh6/01-night-wide.png" alt="FH6 night street — verified scene">
+      <span class="badge ok">Verified ✓ · Sep 19</span>
+    </div>
+    <div class="body">
+      <p class="name">FH6 · Night Street</p>
+      <p class="type">Night neon street · hero district · van delivery scene</p>
+      <p class="note">Sign rework, bloom, wet reflections, wire spans, and the RAKU&nbsp;RAKU van rear decal all pass — zero page errors.</p>
+      <div class="shots">
+        <figure><img src="districts/fh6/reference.jpg" alt="Reference photo"><figcaption>Reference photo</figcaption></figure>
+        <figure><img src="districts/fh6/02-kanban-left-road.png" alt="Kanban closeup"><figcaption>Kanban closeup</figcaption></figure>
+        <figure><img src="districts/fh6/07-fascia-awnings.png" alt="Fascia + awnings"><figcaption>Fascia &amp; awnings</figcaption></figure>
+        <figure><img src="districts/fh6/09-van-rear-fixed.png" alt="Van rear decal fixed"><figcaption>Van rear decal (fixed)</figcaption></figure>
+      </div>
+      <a class="play" href="https://doublehidenblade.github.io/tokyo-drift-3d/fh6-scene.html">▶ Play the FH6 scene</a>
+    </div>
+  </section>
+
+  <!-- District 2 -->
+  <section class="card">
+    <div class="banner">
+      <img class="hero" src="districts/district2/01-night-wide.png" alt="District 2 industrial dock night scene">
+      <span class="badge ok">Verified ✓ · Sep 19</span>
+    </div>
+    <div class="body">
+      <p class="name">District 2 · Industrial Dock</p>
+      <p class="type">Industrial dock · night</p>
+      <p class="note">Container stacks, gantry crane on narrow rails with beacon, forklift, sodium floodlights, wet asphalt. Zero page errors.</p>
+      <div class="shots">
+        <figure><img src="districts/district2/03-crane-closeup.png" alt="Crane closeup"><figcaption>Crane closeup</figcaption></figure>
+        <figure><img src="districts/district2/06-beacon-closeup-a.png" alt="Beacon closeup"><figcaption>Beacon closeup</figcaption></figure>
+        <figure><img src="districts/district2/mock.jpg" alt="Approved mock"><figcaption>Approved mock</figcaption></figure>
+      </div>
+      <a class="play" href="https://doublehidenblade.github.io/tokyo-drift-3d/district2-scene.html">▶ Play the District 2 scene</a>
+    </div>
+  </section>
+
+  <!-- Start Plaza -->
+  <section class="card">
+    <div class="banner">
+      <img class="hero" src="districts/startplaza/01-arch-wide.png" alt="Start Plaza neon arch scene">
+      <span class="badge ok">Verified ✓ · Sep 19</span>
+    </div>
+    <div class="body">
+      <p class="name">Start Plaza</p>
+      <p class="type">Starting plaza · night</p>
+      <p class="note">Kabukicho red neon arch （歌舞伎町一番街） on real supports, 10 complete storefront assemblies, 18 perpendicular tate-kanban with real Japanese, wet reflective road. Zero page errors.</p>
+      <div class="shots">
+        <figure><img src="districts/startplaza/02-kanban-honjin.png" alt="Kanban closeup"><figcaption>Kanban closeup</figcaption></figure>
+        <figure><img src="districts/startplaza/03-kanban-okonomi.png" alt="Kanban closeup"><figcaption>Kanban closeup</figcaption></figure>
+        <figure><img src="districts/startplaza/mock.jpg" alt="Mock"><figcaption>Mock</figcaption></figure>
+      </div>
+      <a class="play" href="https://doublehidenblade.github.io/tokyo-drift-3d/startplaza-scene.html">▶ Play the Start Plaza scene</a>
+    </div>
+  </section>
+
+  <!-- Harbor West -->
+  <section class="card">
+    <div class="banner">
+      <img class="hero" src="districts/harborwest/mock.jpg" alt="Harbor West mock">
+      <span class="badge busy">Verifying…</span>
+    </div>
+    <div class="body">
+      <p class="name">Harbor West</p>
+      <p class="type">Harbor district · night</p>
+      <p class="note">Mock landed. 3D scene verification in progress.</p>
+    </div>
+  </section>
+
+  <!-- The Climb -->
+  <section class="card">
+    <div class="banner">
+      <img class="hero" src="districts/the-climb/mock.jpg" alt="The Climb mock">
+      <span class="badge busy">Verifying…</span>
+    </div>
+    <div class="body">
+      <p class="name">The Climb</p>
+      <p class="type">Hill / elevation district · night</p>
+      <p class="note">Mock landed. 3D scene verification in progress.</p>
+    </div>
+  </section>
+
+  <!-- Waterfront East -->
+  <section class="card">
+    <div class="banner">
+      <img class="hero" src="districts/waterfront-east/mock.jpg" alt="Waterfront East mock">
+      <span class="badge busy">Verifying…</span>
+    </div>
+    <div class="body">
+      <p class="name">Waterfront East</p>
+      <p class="type">Waterfront district · night</p>
+      <p class="note">Mock landed. 3D scene verification in progress.</p>
+    </div>
+  </section>
+
+  <!-- South Ridge -->
+  <section class="card">
+    <div class="banner">
+      <img class="hero" src="districts/south-ridge/01-night-wide.png" alt="South Ridge tunnel portal night scene">
+      <span class="badge ok">Verified ✓ · Sep 19</span>
+    </div>
+    <div class="body">
+      <p class="name">South Ridge</p>
+      <p class="type">Ridge district · night</p>
+      <p class="note">Tunnel portal bored into solid mountain (no road above the bore), real Japanese signs （南稜トンネル/トンネル内 点灯せよ）, winding road, sodium lamps, wet asphalt. Zero page errors.</p>
+      <div class="shots">
+        <figure><img src="districts/south-ridge/02-closeup1.png" alt="Portal closeup"><figcaption>Portal closeup</figcaption></figure>
+        <figure><img src="districts/south-ridge/03-closeup2.png" alt="Portal closeup"><figcaption>Portal closeup</figcaption></figure>
+        <figure><img src="districts/south-ridge/04-day-wide.png" alt="Day view"><figcaption>Day view</figcaption></figure>
+      </div>
+      <a class="play" href="https://doublehidenblade.github.io/tokyo-drift-3d/south-ridge-scene.html">▶ Play the South Ridge scene</a>
+    </div>
+  </section>
+
+</div>
+
+<footer>Mock images are concept art, not in-engine shots. Only districts with the green “Verified ✓” badge are considered done.</footer>
+</body>
+</html>

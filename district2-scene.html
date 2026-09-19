@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>District 2 — Night Industrial Dock · 3D Diorama</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:#05070c;overflow:hidden}
+  #view{display:block;width:100vw;height:100vh;cursor:grab;touch-action:none}
+  #view:active{cursor:grabbing}
+  #hud{position:fixed;top:12px;left:14px;color:#fff;font:13px/1.5 system-ui,sans-serif;
+    text-shadow:0 1px 4px #000;pointer-events:none;z-index:5}
+  #hud b{font-size:15px;letter-spacing:.5px}
+  #bar{position:fixed;top:12px;right:14px;z-index:6;display:flex;gap:8px}
+  #bar button{background:rgba(20,24,32,.85);color:#fff;border:1px solid #3a4356;border-radius:8px;
+    padding:9px 14px;font-size:13px;cursor:pointer}
+  #bar button.on{background:#1c3a5e;border-color:#58a6ff}
+  #status{position:fixed;bottom:12px;left:14px;color:#9aa4b5;font:12px system-ui,sans-serif;
+    text-shadow:0 1px 3px #000;z-index:5}
+  #hint{position:fixed;bottom:12px;right:14px;color:#9aa4b5;font:12px system-ui,sans-serif;z-index:5}
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="hud"><b>District 2 — Night Industrial Dock</b><br><span id="sub">static scene · orbit showroom</span></div>
+<div id="bar">
+  <button id="btn-day">☀ Day</button>
+  <button id="btn-night" class="on">🌙 Night</button>
+  <button id="btn-cam">📷 Street view</button>
+</div>
+<div id="status">loading…</div>
+<div id="hint">drag to orbit · scroll to zoom</div>
+
+<script type="module">
+import * as THREE from './vendor/three.module.js';
+import { GLTFLoader } from './vendor/GLTFLoader.js';
+
+const MDIR = './public/models/d2/';
+const statusEl = document.getElementById('status');
+
+const canvas = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.3;
+renderer.shadowMap.enabled = true;               // dynamic shadows only — nothing baked
+renderer.shadowMap.type = THREE.PCFShadowMap;          // (PCFSoftShadowMap is deprecated in r185+)
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x060a18);
+scene.fog = new THREE.Fog(0x060a18, 60, 200);
+
+const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 700);
+
+// ---------- seeded prng ----------
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+function shade(hex,f){const n=parseInt(hex.slice(1),16);const r=Math.min(255,((n>>16)&255)*f)|0,g=Math.min(255,((n>>8)&255)*f)|0,b=Math.min(255,(n&255)*f)|0;return `rgb(${r},${g},${b})`;}
+
+// ---------- procedural canvas textures ----------
+function streakTexture(){
+  const c = document.createElement('canvas'); c.width=64; c.height=256;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0,0,0,256);
+  grad.addColorStop(0,'rgba(255,255,255,0.85)'); grad.addColorStop(1,'rgba(255,255,255,0)');
+  g.fillStyle = grad; g.fillRect(0,0,64,256);
+  const img = g.getImageData(0,0,64,256), d = img.data;
+  for(let y=0;y<256;y++) for(let x=0;x<64;x++){
+    const f = Math.sin(Math.PI*x/64);
+    d[(y*64+x)*4+3] *= f;
+  }
+  g.putImageData(img,0,0);
+  return new THREE.CanvasTexture(c);
+}
+function skyTexture(night){
+  const c = document.createElement('canvas'); c.width=1024; c.height=512;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0,0,0,512);
+  if(night){
+    // deep blue night with sodium-amber glow low on the horizon
+    grad.addColorStop(0,'#01020a'); grad.addColorStop(0.42,'#0a1430');
+    grad.addColorStop(0.60,'#1a2448'); grad.addColorStop(0.68,'#a8541c');
+    grad.addColorStop(0.72,'#2a2038'); grad.addColorStop(1,'#05070c');
+  } else {
+    grad.addColorStop(0,'#3f7fd0'); grad.addColorStop(0.6,'#9cc6ee');
+    grad.addColorStop(0.72,'#e8d9b8'); grad.addColorStop(1,'#b8c4cc');
+  }
+  g.fillStyle = grad; g.fillRect(0,0,1024,512);
+  const rnd = mulberry32(21);
+  if(night){
+    for(let i=0;i<380;i++){ // stars
+      const y = rnd()*290, x = rnd()*1024;
+      g.fillStyle = `rgba(255,255,255,${0.25+rnd()*0.6})`;
+      g.fillRect(x, y, rnd()<0.12?2:1, rnd()<0.12?2:1);
+    }
+  } else {
+    g.fillStyle='rgba(255,255,255,0.5)';
+    for(let i=0;i<14;i++){ const x=rnd()*1024,y=40+rnd()*180; g.beginPath(); g.ellipse(x,y,40+rnd()*60,12+rnd()*10,0,0,7); g.fill(); }
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+// distant industrial skyline: chimneys, factory blocks, silos, crane silhouettes, red aviation beacons
+function dockSkylineTexture(){
+  const c = document.createElement('canvas'); c.width=2048; c.height=256;
+  const g = c.getContext('2d'), rnd = mulberry32(77);
+  g.clearRect(0,0,2048,256);
+  let x = 0;
+  while(x < 2048){
+    const kind = rnd();
+    if(kind < 0.30){            // chimney stack
+      const bw = 14+rnd()*10, bh = 130+rnd()*90;
+      g.fillStyle = '#030509'; g.fillRect(x, 256-bh, bw, bh);
+      g.fillStyle = '#05070b'; g.fillRect(x-3, 256-bh, bw+6, 8); // cap
+      g.fillStyle = '#ff2222'; g.fillRect(x+bw/2-2.5, 256-bh-8, 5, 5); // aviation beacon
+    } else if(kind < 0.55){     // factory block with lit windows
+      const bw = 90+rnd()*140, bh = 50+rnd()*70;
+      g.fillStyle = '#04060b'; g.fillRect(x, 256-bh, bw, bh);
+      for(let wy=256-bh+8; wy<248; wy+=13) for(let wx=x+6; wx<x+bw-6; wx+=11){
+        if(rnd()<0.30){
+          g.fillStyle = `rgba(255,${165+rnd()*45|0},95,0.85)`;
+          g.fillRect(wx, wy, 5, 6);
+        }
+      }
+      if(rnd()<0.4){ g.fillStyle='#ff2222'; g.fillRect(x+bw/2-2, 256-bh-7, 4, 4); }
+    } else if(kind < 0.70){     // silo
+      const bw = 34+rnd()*16, bh = 70+rnd()*50;
+      g.fillStyle = '#04060b';
+      g.fillRect(x, 256-bh+10, bw, bh-10);
+      g.beginPath(); g.arc(x+bw/2, 256-bh+10, bw/2, Math.PI, 0); g.fill();
+    } else if(kind < 0.85){     // distant gantry crane silhouette
+      const bw = 60+rnd()*40, bh = 120+rnd()*60;
+      g.fillStyle = '#04060b';
+      g.fillRect(x, 256-bh, 6, bh); g.fillRect(x+bw, 256-bh, 6, bh);
+      g.fillRect(x, 256-bh, bw+6, 8);
+      g.fillRect(x+bw*0.3, 256-bh, 4, 40);
+      if(rnd()<0.7){ g.fillStyle='#ff7722'; g.fillRect(x+bw/2-2, 256-bh-6, 4, 4); }
+    } else {                    // low warehouse strip
+      const bw = 120+rnd()*120, bh = 36+rnd()*24;
+      g.fillStyle = '#04060b'; g.fillRect(x, 256-bh, bw, bh);
+    }
+    x += (kind<0.30? 60 : 90) + rnd()*70;
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+// lights (built once, retuned by day/night)
+const hemi = new THREE.HemisphereLight(0x2a3a5f, 0x0a0c12, 0.55); scene.add(hemi);
+const moon = new THREE.DirectionalLight(0x8fb0ff, 0.55);
+moon.position.set(-25, 40, 20); moon.castShadow = true;
+moon.shadow.mapSize.set(2048, 2048);
+moon.shadow.camera.left=-70; moon.shadow.camera.right=70;
+moon.shadow.camera.top=70; moon.shadow.camera.bottom=-70;
+moon.shadow.camera.far=200; moon.shadow.bias=-0.0004;
+scene.add(moon); scene.add(moon.target); moon.target.position.set(0,0,-40);
+const sun = new THREE.DirectionalLight(0xfff2dd, 0.0);
+sun.position.set(30, 50, 25); sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left=-70; sun.shadow.camera.right=70;
+sun.shadow.camera.top=70; sun.shadow.camera.bottom=-70;
+sun.shadow.camera.far=220; sun.shadow.bias=-0.0004;
+scene.add(sun); scene.add(sun.target); sun.target.position.set(0,0,-40);
+// sodium floodlight pools (night)
+const pools = [];
+const floodPos = [[-8,-6,1],[8,-20,-1],[-8,-36,1],[8,-52,-1],[-8,-68,1]]; // x, z, towardRoad(+1/-1)
+for (const [x,z,dir] of floodPos){
+  const p = new THREE.PointLight(0xffa63d, 0, 58, 1.7);
+  p.position.set(x+dir*1.2, 11.0, z); scene.add(p); pools.push(p);
+}
+// warm wash near ajar warehouse doors
+const doorWash = [];
+for (const [x,y,z] of [[-14,2.5,-13.25],[14,2.5,-41.75]]){
+  const p = new THREE.PointLight(0xffb45e, 0, 17, 1.7);
+  p.position.set(x, y, z); scene.add(p); doorWash.push(p);
+}
+// cool blue fill for the amber/blue palette contrast
+const blueFill = new THREE.PointLight(0x3a5a9a, 0, 70, 1.8);
+blueFill.position.set(-30, 26, -40); scene.add(blueFill);
+// crane beacon light (pulsed)
+const beaconLight = new THREE.PointLight(0xff7a00, 0, 40, 1.7);
+beaconLight.position.set(17, 25.6, -32.5); scene.add(beaconLight);
+
+// night-sky dome + distant dock skyline
+const skyMat = new THREE.MeshBasicMaterial({ map: skyTexture(true), side: THREE.BackSide, fog:false, depthWrite:false });
+const skyDome = new THREE.Mesh(new THREE.SphereGeometry(340, 32, 20), skyMat);
+skyDome.position.set(0, 0, -60); scene.add(skyDome);
+const daySkyTex = skyTexture(false), nightSkyTex = skyMat.map;
+const skylineMat = new THREE.MeshBasicMaterial({ map: dockSkylineTexture(), transparent:true, fog:false, depthWrite:false });
+const skyline = new THREE.Mesh(new THREE.PlaneGeometry(640, 80), skylineMat);
+skyline.position.set(0, 28, -160); scene.add(skyline);
+
+function setNight(on){
+  document.getElementById('btn-night').classList.toggle('on', on);
+  document.getElementById('btn-day').classList.toggle('on', !on);
+  if (on){
+    scene.background.set(0x060a18); scene.fog.color.set(0x060a18);
+    hemi.intensity=0.62; hemi.color.set(0x2a3a5f); hemi.groundColor.set(0x0a0c12);
+    moon.intensity=0.55; sun.intensity=0.0;
+    pools.forEach(p=>p.intensity=38); doorWash.forEach(p=>p.intensity=22);
+    blueFill.intensity=9;
+    renderer.toneMappingExposure=1.3;
+    skyMat.map = nightSkyTex; skyline.visible = true;
+  } else {
+    scene.background.set(0x9fc3e8); scene.fog.color.set(0x9fc3e8);
+    hemi.intensity=1.1; hemi.color.set(0xbfd9ff); hemi.groundColor.set(0x6a7078);
+    moon.intensity=0.0; sun.intensity=2.6;
+    pools.forEach(p=>p.intensity=0); doorWash.forEach(p=>p.intensity=0);
+    blueFill.intensity=0; beaconLight.intensity=0;
+    renderer.toneMappingExposure=1.0;
+    skyMat.map = daySkyTex; skyline.visible = false;
+  }
+  skyMat.needsUpdate = true;
+  window.__d2.night = on;
+}
+document.getElementById('btn-day').onclick = ()=>setNight(false);
+document.getElementById('btn-night').onclick = ()=>setNight(true);
+
+// --- inline orbit (showroom pattern) ---
+const orbit = { theta:0.0, phi:1.44, radius:30, target:new THREE.Vector3(0,2.2,-34), auto:false };
+let dragging=false, px=0, py=0;
+canvas.addEventListener('pointerdown', e=>{ dragging=true; px=e.clientX; py=e.clientY; orbit.auto=false; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', e=>{
+  if(!dragging) return;
+  orbit.theta -= (e.clientX-px)*0.007;
+  orbit.phi = THREE.MathUtils.clamp(orbit.phi-(e.clientY-py)*0.007, 0.12, Math.PI-0.08);
+  px=e.clientX; py=e.clientY;
+});
+canvas.addEventListener('pointerup', ()=>{ dragging=false; });
+canvas.addEventListener('pointercancel', ()=>{ dragging=false; });
+canvas.addEventListener('wheel', e=>{
+  e.preventDefault();
+  orbit.radius = THREE.MathUtils.clamp(orbit.radius*(1+Math.sign(e.deltaY)*0.1), 4, 200);
+  orbit.auto=false;
+}, { passive:false });
+
+function streetView(){
+  // match the reference mock: low on the road, looking down the dock avenue
+  orbit.target.set(0, 2.2, -34);
+  orbit.theta = 0.0; orbit.phi = 1.44; orbit.radius = 30; orbit.auto=false;
+}
+function setView(theta, phi, radius, tx, ty, tz){
+  orbit.theta=theta; orbit.phi=phi; orbit.radius=radius;
+  orbit.target.set(tx,ty,tz); orbit.auto=false;
+}
+document.getElementById('btn-cam').onclick = streetView;
+
+function sizeRenderer(){
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
+  renderer.setSize(w, h, false);
+  camera.aspect = w/h; camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', sizeRenderer);
+
+// --- scene assembly (from district2-scene/scene-plan.json) ---
+const loader = new GLTFLoader();
+const cache = new Map();
+function loadGLB(file){
+  if (cache.has(file)) return cache.get(file);
+  const p = new Promise((res, rej)=>loader.load(MDIR+file, gltf=>res(gltf), undefined, rej));
+  cache.set(file, p); return p;
+}
+async function place(file, x, y, z, rotY=0){
+  const gltf = await loadGLB(file);
+  const o = gltf.scene.clone(true);
+  o.position.set(x, y, z); o.rotation.y = rotY;
+  o.traverse(n=>{ if(n.isMesh){ n.castShadow=true; n.receiveShadow=true; } });
+  scene.add(o); return o;
+}
+
+const wireMat = new THREE.MeshBasicMaterial({ color:0x050507 });
+function catenary(a, b, sag, radius=0.025){
+  const mid = new THREE.Vector3().addVectors(a,b).multiplyScalar(0.5); mid.y -= sag;
+  const curve = new THREE.QuadraticBezierCurve3(a, mid, b);
+  const mesh = new THREE.Mesh(new THREE.TubeGeometry(curve, 20, radius, 6), wireMat);
+  scene.add(mesh); return mesh;
+}
+
+const streakTex = streakTexture();
+function floodReflection(x, z, dir, tint=0xffa63d){
+  // long warm streak on the wet asphalt toward the camera + a soft pool
+  const g = new THREE.Group();
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 14),
+    new THREE.MeshBasicMaterial({ map: streakTex, color: tint, transparent:true,
+      opacity: 0.30, blending: THREE.AdditiveBlending, depthWrite:false }));
+  m.rotation.x = -Math.PI/2; m.rotation.z = Math.PI; // streak widens toward camera
+  m.position.set(x+dir*1.2, 0.16, z+5); g.add(m);
+  const pool = new THREE.Mesh(new THREE.CircleGeometry(2.6, 24),
+    new THREE.MeshBasicMaterial({ color: tint, transparent:true, opacity: 0.10,
+      blending: THREE.AdditiveBlending, depthWrite:false }));
+  pool.rotation.x = -Math.PI/2; pool.position.set(x+dir*1.2, 0.15, z); g.add(pool);
+  scene.add(g);
+}
+
+const CONT_H = 2.59;
+const beaconMats = [];
+async function build(){
+  const jobs = [];
+  // ground + markings (span z in [10,-94])
+  const ground = await place('bt-d2-ground.glb', 0, 0, -42);
+  ground.traverse(n=>{ // wet asphalt: lower roughness so floodlights gleam
+    if(n.isMesh && /asphalt/i.test(n.material.name||'')) n.material.roughness = 0.32;
+  });
+  jobs.push(Promise.resolve(ground));
+  jobs.push(place('bt-d2-markings.glb', 0, 0, -42));
+
+  // warehouses (facades face the road)
+  const WH = [
+    ['bt-d2-warehouse-a.glb', -26, -15,  Math.PI/2],
+    ['bt-d2-warehouse-b.glb', -26, -45,  Math.PI/2],
+    ['bt-d2-warehouse-a.glb', -26, -75,  Math.PI/2],
+    ['bt-d2-warehouse-b.glb',  26, -10, -Math.PI/2],
+    ['bt-d2-warehouse-a.glb',  26, -40, -Math.PI/2],
+    ['bt-d2-warehouse-b.glb',  26, -70, -Math.PI/2],
+  ];
+  for (const [f,x,z,r] of WH) jobs.push(place(f, x, 0, z, r));
+
+  // container stacks
+  const rnd = mulberry32(7);
+  const stacksL = [[-13,-6,'blue',2],[-13,-13,'red',1],[-13,-20,'green',3],[-16,-27,'orange',2],
+                   [-13,-34,'steel',2],[-16,-41,'green',1],[-13,-48,'red',3],[-13,-55,'blue',1],
+                   [-16,-62,'orange',2],[-13,-69,'steel',1]];
+  const stacksR = [[13,-8,'steel',2],[13,-15,'red',1],[16,-22,'blue',2],[13,-36,'orange',2],
+                   [16,-43,'green',1],[13,-56,'steel',2],[13,-63,'red',2],[16,-70,'blue',1],
+                   [13,-77,'green',2]];
+  for (const [x,z,c,levels] of [...stacksL, ...stacksR]){
+    for (let L=0; L<levels; L++){
+      const jx = x+(rnd()-0.5)*0.1, jz = z+(rnd()-0.5)*0.1, jr = (rnd()-0.5)*0.05;
+      jobs.push(place(`bt-d2-container-${c}.glb`, jx, L*CONT_H, jz, jr));
+    }
+  }
+
+  // gantry crane (rails at world x=10,24; legs z=-28,-48)
+  const crane = await place('bt-d2-crane.glb', 17, 0, -38);
+  crane.traverse(n=>{
+    if(n.isMesh && /beacon/i.test(n.name)) beaconMats.push(n.material);
+  });
+  jobs.push(Promise.resolve(crane));
+
+  // floodlight towers (arm toward road) + lights + wet reflections
+  for (const [x,z,dir] of floodPos){
+    jobs.push(place('bt-d2-floodlight.glb', x, 0, z, dir>0 ? Math.PI/2 : -Math.PI/2));
+    floodReflection(x, z, dir);
+  }
+
+  // power poles + catenary wires from real crossarm points
+  const poleZ = [-10,-30,-50,-70];
+  for (const z of poleZ) jobs.push(place('bt-d2-pole.glb', -7.5, 0, z));
+  const V = (x,y,z)=>new THREE.Vector3(x,y,z);
+  for (let i=0;i<poleZ.length-1;i++){
+    for (const dx of [-0.95, 0.95])
+      catenary(V(-7.5+dx, 8.5, poleZ[i]), V(-7.5+dx, 8.5, poleZ[i+1]), 1.1);
+  }
+  // one crossing span, pole-top to floodlight-top (real attachment points)
+  catenary(V(-7.5, 8.9, -30), V(-8, 11.2, -36), 1.3);
+
+  // forklift + container truck
+  jobs.push(place('bt-d2-forklift.glb', -10.5, 0, -18, -0.4));
+  jobs.push(place('bt-d2-truck.glb', 7.2, 0, -34, Math.PI));
+
+  // cones
+  for (const [x,z] of [[-9,-16],[-12,-19.5],[-9.3,-20.5],[5.6,-31],[8.8,-37.5],[5.9,-38],
+                       [8.6,-26],[8.6,-50],[25.4,-30]])
+    jobs.push(place('bt-d2-cone.glb', x, 0, z, rnd()*Math.PI));
+
+  // barrels (second cluster tinted steel-blue via cloned material)
+  const barrelSpots = [];
+  for (let i=0;i<4;i++) barrelSpots.push([-18+(rnd()-0.5)*1.6, -30+(rnd()-0.5)*1.6, 0]);
+  for (let i=0;i<3;i++) barrelSpots.push([20+(rnd()-0.5)*1.6, -48+(rnd()-0.5)*1.6, 1]);
+  for (let i=0;i<3;i++) barrelSpots.push([-17.5+(rnd()-0.5)*1.6, -60+(rnd()-0.5)*1.6, 0]);
+  const blueDrum = new THREE.MeshStandardMaterial({ color:0x2a4a6a, roughness:0.75, metalness:0.3 });
+  for (const [x,z,tint] of barrelSpots){
+    jobs.push(place('bt-d2-barrel.glb', x, 0, z, rnd()*Math.PI).then(o=>{
+      if (tint){
+        o.traverse(n=>{
+          if(n.isMesh && /rust/i.test(n.material.name||'')) n.material = blueDrum;
+        });
+      }
+      return o;
+    }));
+  }
+
+  // pallets with wrapped crates
+  for (const [x,z,r] of [[-19,-12,0.3],[ -18.2,-13.4,-0.4],[18,-22,0.2],[18.8,-23.2,1.1],[19,-58,-0.3]])
+    jobs.push(place('bt-d2-pallet.glb', x, 0, z, r));
+
+  // flat bracket signs — real Japanese words, mounted on facades toward road
+  // (sign origin 0.25 m outside the facade; arms reach back into the wall)
+  const signs = [
+    ['bt-d2-sign-warehouse.glb', -13.75, 0.35, -15, Math.PI],  // wh A facade x=-14
+    ['bt-d2-sign-transport.glb',  13.75, 0.35, -40, 0],        // wh A facade x=+14
+    ['bt-d2-sign-24h.glb',       -15.75, 0.35, -45, Math.PI],  // wh B facade x=-16
+    ['bt-d2-sign-port.glb',       15.75, 0.35, -70, 0],        // wh B facade x=+16
+  ];
+  for (const [f,x,y,z,r] of signs) jobs.push(place(f, x, y, z, r));
+
+  let done = 0; const total = jobs.length;
+  for (const j of jobs){ await j; done++; statusEl.textContent = `loading ${done}/${total}`; }
+}
+
+function loop(){
+  requestAnimationFrame(loop);
+  if (orbit.auto) orbit.theta += 0.003;
+  const sp = Math.sin(orbit.phi);
+  camera.position.set(
+    orbit.target.x + orbit.radius*sp*Math.sin(orbit.theta),
+    orbit.target.y + orbit.radius*Math.cos(orbit.phi),
+    orbit.target.z + orbit.radius*sp*Math.cos(orbit.theta));
+  camera.lookAt(orbit.target);
+  // crane beacon pulse (night only)
+  if (window.__d2.night){
+    const k = (Math.sin(performance.now()*0.006)+1)/2; // 0..1
+    beaconMats.forEach(m=>{ m.emissiveIntensity = 0.6 + 5.0*k; });
+    beaconLight.intensity = 34*k;
+  } else {
+    beaconMats.forEach(m=>{ m.emissiveIntensity = 0.0; });
+    beaconLight.intensity = 0;
+  }
+  renderer.render(scene, camera);
+}
+
+window.__d2 = { night:true, ready:false, setNight, streetView, setView, scene, camera,
+  state:()=>({ ready:window.__d2.ready, night:window.__d2.night,
+    objects: scene.children.length,
+    cam: camera.position.toArray().map(v=>+v.toFixed(2)) }) };
+
+sizeRenderer();
+setNight(true);
+streetView();
+build().then(()=>{
+  window.__d2.ready = true;
+  statusEl.textContent = 'ready — 21 assets · static diorama';
+}).catch(err=>{
+  statusEl.textContent = 'LOAD ERROR: ' + (err.message||err);
+  window.__d2.error = String(err);
+});
+loop();
+</script>
+</body>
+</html>

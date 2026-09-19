@@ -1,0 +1,922 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Start Plaza — Neon Commercial Straight · 3D Diorama</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:#05070c;overflow:hidden}
+  #view{display:block;width:100vw;height:100vh;cursor:grab;touch-action:none}
+  #view:active{cursor:grabbing}
+  #hud{position:fixed;top:12px;left:14px;color:#fff;font:13px/1.5 system-ui,sans-serif;
+    text-shadow:0 1px 4px #000;pointer-events:none;z-index:5}
+  #hud b{font-size:15px;letter-spacing:.5px}
+  #bar{position:fixed;top:12px;right:14px;z-index:6;display:flex;gap:8px}
+  #bar button{background:rgba(20,24,32,.85);color:#fff;border:1px solid #3a4356;border-radius:8px;
+    padding:9px 14px;font-size:13px;cursor:pointer}
+  #bar button.on{background:#1c3a5e;border-color:#58a6ff}
+  #status{position:fixed;bottom:12px;left:14px;color:#9aa4b5;font:12px system-ui,sans-serif;
+    text-shadow:0 1px 3px #000;z-index:5}
+  #hint{position:fixed;bottom:12px;right:14px;color:#9aa4b5;font:12px system-ui,sans-serif;z-index:5}
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="hud"><b>Start Plaza — neon commercial straight</b><br><span id="sub">static scene · orbit showroom</span></div>
+<div id="bar">
+  <button id="btn-day">☀ Day</button>
+  <button id="btn-night" class="on">🌙 Night</button>
+  <button id="btn-cam">📷 Street view</button>
+</div>
+<div id="status">loading…</div>
+<div id="hint">drag to orbit · scroll to zoom</div>
+
+<script type="module">
+import * as THREE from './vendor/three.module.js';
+
+const statusEl = document.getElementById('status');
+const canvas = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.35;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;   // PCFSoftShadowMap deprecated in r185+
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x05070e);
+scene.fog = new THREE.Fog(0x05070e, 70, 230);
+
+const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 800);
+
+// ---------- seeded prng ----------
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+function shade(hex,f){const n=parseInt(hex.slice(1),16);const r=Math.min(255,((n>>16)&255)*f)|0,g=Math.min(255,((n>>8)&255)*f)|0,b=Math.min(255,(n&255)*f)|0;return `rgb(${r},${g},${b})`;}
+
+// ---------- canvas helpers ----------
+const CJK = '"Noto Sans CJK JP","Noto Sans CJK",sans-serif';
+function cnv(w,h){ const c=document.createElement('canvas'); c.width=w; c.height=h; return [c, c.getContext('2d')]; }
+function tex(c, srgb=true){ const t=new THREE.CanvasTexture(c); if(srgb) t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=8; return t; }
+// vertical Japanese text block (chars stacked top -> bottom), centered at (cx,cy)
+function vText(g, text, cx, cy, fs, color, dy=1.04){
+  g.save(); g.fillStyle=color; g.textAlign='center'; g.textBaseline='middle';
+  g.font=`900 ${fs}px ${CJK}`;
+  const ch=[...text];
+  ch.forEach((c,i)=> g.fillText(c, cx, cy+(i-(ch.length-1)/2)*fs*dy));
+  g.restore();
+}
+// --- tate-kanban / wall-board texture: REAL Japanese text only ---
+// opts: {text, sub, bg, fg, vertical, w, h, frame=true, glow=false}
+function signTexture(o){
+  const w=o.w||256, h=o.h||1024;
+  const [c,g]=cnv(w,h);
+  const grad=g.createLinearGradient(0,0,o.vertical?w:0,o.vertical?0:h);
+  grad.addColorStop(0,shade(o.bg,1.18)); grad.addColorStop(0.5,shade(o.bg,0.95)); grad.addColorStop(1,shade(o.bg,0.62));
+  g.fillStyle=grad; g.fillRect(0,0,w,h);
+  const sheen=g.createLinearGradient(0,0,w,0);
+  sheen.addColorStop(0,'rgba(255,255,255,0)'); sheen.addColorStop(0.5,'rgba(255,255,255,0.10)'); sheen.addColorStop(1,'rgba(255,255,255,0)');
+  g.fillStyle=sheen; g.fillRect(0,0,w,h);
+  if(o.frame!==false){
+    g.strokeStyle=o.fg; g.lineWidth=Math.max(4,w*0.028);
+    g.strokeRect(g.lineWidth*0.9, g.lineWidth*0.9, w-1.8*g.lineWidth, h-1.8*g.lineWidth);
+  }
+  if(o.vertical){
+    const n=[...o.text].length;
+    const fs=Math.min(w*0.62, (h*0.86)/(n*1.04));
+    vText(g,o.text,w/2,h/2,fs,o.fg);
+    if(o.sub){ g.fillStyle=o.fg; g.textAlign='center'; g.font=`700 ${w*0.13}px ${CJK}`;
+      g.fillText(o.sub, w/2, h*0.94); }
+  } else {
+    const n=[...o.text].length;
+    const fs=Math.min(h*0.50, (w*0.88)/(n*0.98));
+    g.fillStyle=o.fg; g.textAlign='center'; g.textBaseline='middle';
+    g.font=`900 ${fs}px ${CJK}`;
+    g.fillText(o.text, w/2, h*(o.sub?0.40:0.52));
+    if(o.sub){ g.font=`700 ${h*0.20}px ${CJK}`; g.fillText(o.sub, w/2, h*0.72); }
+  }
+  const vg=g.createRadialGradient(w/2,h/2,Math.min(w,h)*0.35,w/2,h/2,Math.max(w,h)*0.72);
+  vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(0,0,0,0.20)');
+  g.fillStyle=vg; g.fillRect(0,0,w,h);
+  return tex(c);
+}
+// --- storefront fascia texture (horizontal, real Japanese) ---
+function fasciaTexture(name, sub, bg, fg){
+  const [c,g]=cnv(1024,192);
+  const grad=g.createLinearGradient(0,0,0,192);
+  grad.addColorStop(0,shade(bg,1.22)); grad.addColorStop(0.55,shade(bg,0.95)); grad.addColorStop(1,shade(bg,0.6));
+  g.fillStyle=grad; g.fillRect(0,0,1024,192);
+  g.strokeStyle=fg; g.lineWidth=7; g.strokeRect(10,10,1004,172);
+  const n=[...name].length;
+  const fs=Math.min(118, 930/(n*0.98));
+  g.fillStyle=fg; g.textAlign='center'; g.textBaseline='middle';
+  g.font=`900 ${fs}px ${CJK}`;
+  g.fillText(name, 512, sub?82:96);
+  if(sub){ g.font=`700 44px ${CJK}`; g.fillText(sub, 512, 150); }
+  return tex(c);
+}
+// --- warm interior glow behind shop glass (shelves/counter hint, abstract) ---
+function interiorTexture(seed, warm='#ffca7a'){
+  const rnd=mulberry32(seed);
+  const [c,g]=cnv(512,256);
+  const grad=g.createLinearGradient(0,0,0,256);
+  grad.addColorStop(0,shade(warm,0.95)); grad.addColorStop(0.6,shade(warm,0.62)); grad.addColorStop(1,shade(warm,0.34));
+  g.fillStyle=grad; g.fillRect(0,0,512,256);
+  // shelf bands with goods silhouettes (abstract, dark against glow)
+  g.fillStyle='rgba(40,22,10,0.55)';
+  for(let s=0;s<3;s++){
+    const y=70+s*58;
+    g.fillRect(0,y,512,10);
+    for(let x=8;x<500;x+=18+rnd()*22){
+      const hw=8+rnd()*14, hh=18+rnd()*26;
+      g.fillRect(x,y-hh,hw,hh);
+    }
+  }
+  // counter at bottom
+  g.fillStyle='rgba(30,16,8,0.6)'; g.fillRect(0,214,512,42);
+  return tex(c);
+}
+// --- upper-facade texture: window grid, some lit ---
+function facadeTexture(o){
+  // o: {w, h, stories, tint, seed, lit}
+  const rnd=mulberry32(o.seed);
+  const W=512, rowH=96, H=o.stories*rowH;
+  const [c,g]=cnv(W,H);
+  g.fillStyle=o.tint; g.fillRect(0,0,W,H);
+  // subtle panel lines
+  g.strokeStyle='rgba(0,0,0,0.35)'; g.lineWidth=3;
+  for(let s=0;s<=o.stories;s++){ g.beginPath(); g.moveTo(0,s*rowH); g.lineTo(W,s*rowH); g.stroke(); }
+  const cols=Math.max(3, Math.round(o.w/3.2));
+  for(let s=0;s<o.stories;s++){
+    for(let i=0;i<cols;i++){
+      const wx=14+i*(W-28)/cols, ww=(W-28)/cols-16, wy=s*rowH+24, wh=rowH-48;
+      const lit=rnd()<o.lit;
+      g.fillStyle=lit? (rnd()<0.8?'rgba(255,196,120,0.95)':'rgba(170,210,255,0.9)') : 'rgba(8,12,20,0.92)';
+      g.fillRect(wx,wy,ww,wh);
+      g.strokeStyle='rgba(0,0,0,0.6)'; g.lineWidth=3; g.strokeRect(wx,wy,ww,wh);
+      // cross mullions so lit openings read as windows, not blank panels
+      g.strokeStyle='rgba(10,12,16,0.85)'; g.lineWidth=2.5;
+      g.beginPath(); g.moveTo(wx+ww/2,wy); g.lineTo(wx+ww/2,wy+wh); g.stroke();
+      g.beginPath(); g.moveTo(wx,wy+wh/2); g.lineTo(wx+ww,wy+wh/2); g.stroke();
+      if(lit){ g.fillStyle='rgba(0,0,0,0.25)'; g.fillRect(wx,wy+wh*0.55,ww,wh*0.45); } // blind hint
+    }
+  }
+  return tex(c);
+}
+// --- road texture: wet asphalt + markings (lane dashes, zebra, start checkers) ---
+function roadTexture(){
+  const W=512, L=2048; // maps x[-7,7] -> [0,W], z[14,-116] -> [0,L] (130 m)
+  const [c,g]=cnv(W,L);
+  const rnd=mulberry32(99);
+  g.fillStyle='#0b0d12'; g.fillRect(0,0,W,L);
+  for(let i=0;i<9000;i++){ // asphalt speckle
+    const v=rnd();
+    g.fillStyle=`rgba(${20+v*30|0},${22+v*32|0},${26+v*36|0},${0.16+rnd()*0.2})`;
+    g.fillRect(rnd()*W, rnd()*L, 1.6, 1.6);
+  }
+  const zToY=z=>(14-z)/130*L;
+  // edge lines
+  g.fillStyle='rgba(220,225,235,0.75)';
+  g.fillRect(14,0,5,L); g.fillRect(W-19,0,5,L);
+  // lane dashes (3 lanes -> 2 dashed lines at x=-3.5, 0, 3.5? use x=-3.5,+3.5 and center solid)
+  g.fillStyle='rgba(230,235,245,0.8)';
+  for(let z=10;z>-112;z-=6){
+    g.fillRect(W/2-26, zToY(z), 5, 26);   // x=-3.5 dash
+    g.fillRect(W/2+21, zToY(z), 5, 26);   // x=+3.5 dash
+  }
+  g.fillRect(W/2-3, 0, 6, L); // center solid
+  // zebra crossing at z=-6 (band 3 m)
+  g.fillStyle='rgba(225,230,240,0.85)';
+  for(let x=-6;x<6;x+=1.6) g.fillRect((x+7)/14*W, zToY(-4.5), 1.1/14*W, 3/130*L);
+  // checkered start line under the arch at z=-35 (band 1.4 m, x[-6.6,6.6])
+  const zb=zToY(-34.3), ze=zToY(-35.7);
+  const x0=(-6.6+7)/14*W, x1=(6.6+7)/14*W, cw=(x1-x0)/22;
+  for(let i=0;i<22;i++) for(let j=0;j<2;j++){
+    g.fillStyle=(i+j)%2? '#e8ecf4':'#0a0c10';
+    g.fillRect(x0+i*cw, zb+(ze-zb)*j/2, cw+0.5, (ze-zb)/2+0.5);
+  }
+  return tex(c);
+}
+// --- concrete sidewalk ---
+function concreteTexture(){
+  const [c,g]=cnv(256,1024); const rnd=mulberry32(7);
+  g.fillStyle='#23262e'; g.fillRect(0,0,256,1024);
+  for(let i=0;i<2600;i++){ const v=rnd(); g.fillStyle=`rgba(${40+v*24|0},${42+v*24|0},${48+v*26|0},0.25)`; g.fillRect(rnd()*256,rnd()*1024,2,2); }
+  g.strokeStyle='rgba(0,0,0,0.5)'; g.lineWidth=3;
+  for(let y=0;y<1024;y+=128){ g.beginPath(); g.moveTo(0,y); g.lineTo(256,y); g.stroke(); }
+  const t=tex(c); t.wrapS=t.wrapT=THREE.RepeatWrapping; return t;
+}
+// --- wet-reflection streak (additive) ---
+function streakTexture(){
+  const [c,g]=cnv(64,256);
+  const grad=g.createLinearGradient(0,0,0,256);
+  grad.addColorStop(0,'rgba(255,255,255,0.9)'); grad.addColorStop(1,'rgba(255,255,255,0)');
+  g.fillStyle=grad; g.fillRect(0,0,64,256);
+  const img=g.getImageData(0,0,64,256), d=img.data;
+  for(let y=0;y<256;y++) for(let x=0;x<64;x++){
+    const f=Math.sin(Math.PI*x/64);
+    d[(y*64+x)*4+3]*=f*f;
+  }
+  g.putImageData(img,0,0);
+  return tex(c,false);
+}
+const streakTex = streakTexture();
+// --- sign light-bleed decal (fake GI wash from a lit sign onto the nearby facade) ---
+const bleedTex = (()=>{
+  const [c,g]=cnv(128,128);
+  const grad=g.createRadialGradient(64,64,4,64,64,64);
+  grad.addColorStop(0,'rgba(255,255,255,1)');
+  grad.addColorStop(0.45,'rgba(255,255,255,0.38)');
+  grad.addColorStop(1,'rgba(255,255,255,0)');
+  g.fillStyle=grad; g.fillRect(0,0,128,128);
+  return tex(c,false);
+})();
+function addBleed(x,y,z,dir,w,h,color,opacity){
+  const m=new THREE.MeshBasicMaterial({ map:bleedTex, color, transparent:true, opacity,
+    blending:THREE.AdditiveBlending, depthWrite:false });
+  regDimBasic(m);
+  const p=new THREE.Mesh(new THREE.PlaneGeometry(w,h), m);
+  p.position.set(x,y,z);
+  p.rotation.y=dir>0? Math.PI/2 : -Math.PI/2;
+  scene.add(p);
+}
+function addStreak(x, z, len, color, opacity, width=2.0, y=0.06){
+  const sm=new THREE.MeshBasicMaterial({ map:streakTex, color, transparent:true, opacity,
+    blending:THREE.AdditiveBlending, depthWrite:false });
+  regDimBasic(sm);
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(width,len), sm);
+  m.rotation.x=-Math.PI/2; m.rotation.z=Math.PI; // widest end toward camera (+Z)
+  m.position.set(x,y,z+len/2-0.5);
+  scene.add(m);
+}
+function skyTexture(night){
+  const [c,g]=cnv(1024,512);
+  const grad=g.createLinearGradient(0,0,0,512);
+  if(night){
+    grad.addColorStop(0,'#02030a'); grad.addColorStop(0.42,'#0a1226');
+    grad.addColorStop(0.60,'#1c2547'); grad.addColorStop(0.68,'#8a3a4a');
+    grad.addColorStop(0.73,'#33202f'); grad.addColorStop(1,'#05070c');
+  } else {
+    grad.addColorStop(0,'#3f7fd0'); grad.addColorStop(0.6,'#9cc6ee');
+    grad.addColorStop(0.72,'#e8d9b8'); grad.addColorStop(1,'#b8c4cc');
+  }
+  g.fillStyle=grad; g.fillRect(0,0,1024,512);
+  const rnd=mulberry32(21);
+  if(night){
+    for(let i=0;i<380;i++){
+      const y=rnd()*300, x=rnd()*1024;
+      g.fillStyle=`rgba(255,255,255,${0.25+rnd()*0.6})`;
+      g.fillRect(x,y,rnd()<0.12?2:1,rnd()<0.12?2:1);
+    }
+  } else {
+    g.fillStyle='rgba(255,255,255,0.5)';
+    for(let i=0;i<14;i++){ const x=rnd()*1024,y=40+rnd()*180; g.beginPath(); g.ellipse(x,y,40+rnd()*60,12+rnd()*10,0,0,7); g.fill(); }
+  }
+  return tex(c);
+}
+// distant city silhouette with scattered lit windows
+function skylineTexture(){
+  const [c,g]=cnv(2048,256); const rnd=mulberry32(77);
+  g.clearRect(0,0,2048,256);
+  let x=0;
+  while(x<2048){
+    const bw=60+rnd()*130, bh=50+rnd()*150;
+    g.fillStyle='#04060c'; g.fillRect(x,256-bh,bw,bh);
+    for(let wy=256-bh+8;wy<246;wy+=14) for(let wx=x+6;wx<x+bw-6;wx+=12){
+      if(rnd()<0.22){
+        g.fillStyle=rnd()<0.75?`rgba(255,${170+rnd()*50|0},110,0.85)`:'rgba(150,190,255,0.8)';
+        g.fillRect(wx,wy,5,7);
+      }
+    }
+    if(rnd()<0.35){ g.fillStyle='#ff2a2a'; g.fillRect(x+bw/2-2,256-bh-8,4,4); }
+    x+=bw+10+rnd()*60;
+  }
+  return tex(c);
+}
+
+// ---------- lights ----------
+const hemi = new THREE.HemisphereLight(0x33436e, 0x0a0c12, 0.55); scene.add(hemi);
+const moon = new THREE.DirectionalLight(0x8fb0ff, 0.55);
+moon.position.set(-25, 42, 30); moon.castShadow = true;
+moon.shadow.mapSize.set(2048, 2048);
+moon.shadow.camera.left=-70; moon.shadow.camera.right=70;
+moon.shadow.camera.top=70; moon.shadow.camera.bottom=-70;
+moon.shadow.camera.far=260; moon.shadow.bias=-0.0004;
+scene.add(moon); scene.add(moon.target); moon.target.position.set(0,0,-45);
+const sun = new THREE.DirectionalLight(0xfff2dd, 0.0);
+sun.position.set(30, 50, 25); sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left=-70; sun.shadow.camera.right=70;
+sun.shadow.camera.top=70; sun.shadow.camera.bottom=-70;
+sun.shadow.camera.far=260; sun.shadow.bias=-0.0004;
+scene.add(sun); scene.add(sun.target); sun.target.position.set(0,0,-45);
+// red arch wash (night)
+const archGlow = new THREE.PointLight(0xff2a2a, 0, 55, 1.7);
+archGlow.position.set(0, 8.5, -35); scene.add(archGlow);
+// warm per-shop spill lights (night) — one per OPEN shop, created in storefront()
+const shopLights = [];
+// cool blue counter-fill for the red/blue palette
+const blueFill = new THREE.PointLight(0x3a5aaa, 0, 90, 1.8);
+blueFill.position.set(30, 30, -20); scene.add(blueFill);
+// street lamp pools (night)
+const lampLights = [];
+for (const [x,z] of [[-8.2,-20],[8.2,-50]]){
+  const p=new THREE.PointLight(0xffe6c0, 0, 30, 1.7);
+  p.position.set(x, 7.6, z); scene.add(p); lampLights.push(p);
+}
+
+// ---------- shared materials ----------
+const dimmables=[]; // day/night dimming registry (reg helpers defined with emissiveBoard below)
+const MAT = {
+  steelDark: new THREE.MeshStandardMaterial({ color:0x1a1e26, roughness:0.55, metalness:0.65 }),
+  blackSteel:new THREE.MeshStandardMaterial({ color:0x141821, roughness:0.5,  metalness:0.7 }),
+  concrete:  new THREE.MeshStandardMaterial({ color:0x3a3e46, roughness:0.9, metalness:0.0 }),
+  plinth:    new THREE.MeshStandardMaterial({ color:0x20252e, roughness:0.8, metalness:0.05 }),
+  frameDark: new THREE.MeshStandardMaterial({ color:0x101319, roughness:0.45, metalness:0.6 }),
+  glass:     new THREE.MeshStandardMaterial({ color:0x2a3a4a, roughness:0.08, metalness:0.4,
+    transparent:true, opacity:0.42 }),
+  neonRed:   new THREE.MeshBasicMaterial({ color:0xff2b2b }),
+  neonTube:  new THREE.MeshBasicMaterial({ color:0xff4040 }),
+  white:     new THREE.MeshStandardMaterial({ color:0xd8dce4, roughness:0.7 }),
+  poleConc:  new THREE.MeshStandardMaterial({ color:0x2c2f36, roughness:0.9 }),
+};
+regDimBasic(MAT.neonRed); regDimBasic(MAT.neonTube);
+function box(w,h,d,mat,x=0,y=0,z=0){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat);
+  m.position.set(x,y,z); m.castShadow=true; m.receiveShadow=true; return m;
+}
+function emissiveBoard(w,h,t,canvasTex,intensity=1.6){
+  const m=new THREE.MeshStandardMaterial({ map:canvasTex, emissive:0xffffff,
+    emissiveMap:canvasTex, emissiveIntensity:intensity, roughness:0.5, metalness:0.0 });
+  regDimStd(m, intensity);
+  const mesh=new THREE.Mesh(new THREE.BoxGeometry(w,h,t),m);
+  mesh.castShadow=true; return mesh;
+}
+// day/night dimming registry: emissive signage + neon drop to a dim glow by day
+function regDimStd(mat, base){ dimmables.push({ mat, base, std:true }); }
+function regDimBasic(mat){ dimmables.push({ mat, base:mat.color.clone(), std:false }); }
+function applyDim(night){
+  for(const d of dimmables){
+    if(d.std) d.mat.emissiveIntensity=d.base*(night?1:0.32);
+    else d.mat.color.copy(d.base).multiplyScalar(night?1:0.40);
+  }
+}
+
+// ---------- ground: mirror-wet asphalt, sidewalks, curbs ----------
+function buildGround(){
+  const base=new THREE.Mesh(new THREE.PlaneGeometry(400,400),
+    new THREE.MeshStandardMaterial({ color:0x05060a, roughness:0.95 }));
+  base.rotation.x=-Math.PI/2; base.position.set(0,-0.08,-50); base.receiveShadow=true; scene.add(base);
+
+  const road=new THREE.Mesh(new THREE.PlaneGeometry(14,130),
+    new THREE.MeshStandardMaterial({ map:roadTexture(), roughness:0.26, metalness:0.18 }));
+  road.rotation.x=-Math.PI/2; road.position.set(0,0,-51); road.receiveShadow=true; scene.add(road);
+
+  const conc=concreteTexture(); conc.repeat.set(1,16);
+  for(const s of [-1,1]){
+    const sw=new THREE.Mesh(new THREE.PlaneGeometry(4.6,132),
+      new THREE.MeshStandardMaterial({ map:conc.clone(), roughness:0.55, metalness:0.05 }));
+    sw.material.map.repeat.set(1,16);
+    sw.rotation.x=-Math.PI/2; sw.position.set(s*9.4,0.15,-51); sw.receiveShadow=true; scene.add(sw);
+    const curb=box(0.35,0.32,132,MAT.plinth,s*7.18,0.0,-51); scene.add(curb);
+    // building aprons behind sidewalks
+    const ap=new THREE.Mesh(new THREE.PlaneGeometry(8,132),
+      new THREE.MeshStandardMaterial({ color:0x1c1f26, roughness:0.8 }));
+    ap.rotation.x=-Math.PI/2; ap.position.set(s*15.8,0.02,-51); ap.receiveShadow=true; scene.add(ap);
+  }
+}
+
+// (continued below: buildings, arch, props, sky, assembly, loop)
+
+// ---------- tate-kanban: perpendicular board on VISIBLE bracket arms ----------
+// board juts out from the facade toward the street; two steel arms bolt it to the wall
+function tateKanban(o){
+  // o: {text, sub, bg, fg, w(x-depth), h, x(facade), y(center), z, dir(+1 left bldg / -1 right)}
+  const D=o.dim==null?1:o.dim;   // closed shops run their signs dim
+  const g=new THREE.Group();
+  const jut=0.85;                    // how far the board sticks out from the facade
+  const bx=o.x + o.dir*(0.18+o.w/2); // board center x
+  const boardT=0.09;
+  const t=signTexture({ text:o.text, sub:o.sub, bg:o.bg, fg:o.fg, vertical:true,
+    w:Math.round(o.w*220), h:Math.round(o.h*220) });
+  const board=emissiveBoard(o.w, o.h, boardT, t, 1.7*D);
+  // board thin axis along Z: the textured face reads along the street (perpendicular to facade).
+  // No backing shell — the emissive board is itself solid; a larger shell would swallow it.
+  board.position.set(bx, o.y, o.z);
+  g.add(board);
+  // bracket arms: from facade plate to the board's facade-side edge, top + bottom
+  const x0=o.x+o.dir*0.10, x1=o.x+o.dir*(0.18+0.02);
+  for(const dy of [o.h/2-0.25, -(o.h/2-0.25)]){
+    const len=Math.abs(x1-x0)+o.w;
+    const arm=box(len, 0.09, 0.09, MAT.blackSteel, (x0+x1)/2+o.dir*o.w/2, o.y+dy, o.z);
+    g.add(arm);
+    const plate=box(0.06,0.34,0.22,MAT.steelDark, o.x+o.dir*0.06, o.y+dy, o.z); // wall mount plate
+    g.add(plate);
+    const collar=box(0.14,0.16,0.16,MAT.steelDark, o.x+o.dir*(0.18+0.02), o.y+dy, o.z); // board clamp
+    g.add(collar);
+  }
+  // vertical hanger strap tying arms together behind the board
+  const strap=box(0.05, o.h-0.3, 0.06, MAT.steelDark, o.x+o.dir*0.16, o.y, o.z);
+  g.add(strap);
+  // sign light bleeding onto the facade behind the board (fake GI)
+  addBleed(o.x+o.dir*0.06, o.y, o.z, o.dir, o.w+2.6, o.h+2.2, new THREE.Color(o.bg), 0.26*D);
+  // wet-road reflection streak for the sign
+  addStreak(bx+o.dir*0.2, o.z, 7+o.h*1.2, new THREE.Color(o.bg), 0.22*Math.max(D,0.15), 1.6);
+  return g;
+}
+// ---------- flat wall board, bolted flush to the facade ----------
+function wallBoard(o){
+  // o: {text, sub, bg, fg, w, h, x(facade), y, z, dir}
+  const t=signTexture({ text:o.text, sub:o.sub, bg:o.bg, fg:o.fg, vertical:!!o.vertical,
+    w:o.vertical?200:512, h:o.vertical?512:150 });
+  const board=emissiveBoard(o.w, o.h, 0.08, t, 1.5*(o.dim==null?1:o.dim));
+  board.position.set(o.x+o.dir*0.10, o.y, o.z);
+  board.rotation.y=o.dir>0? Math.PI/2 : -Math.PI/2;
+  const g=new THREE.Group(); g.add(board);
+  // bolt heads
+  for(const [dx,dy] of [[-o.w/2+0.15,-o.h/2+0.15],[o.w/2-0.15,-o.h/2+0.15],[-o.w/2+0.15,o.h/2-0.15],[o.w/2-0.15,o.h/2-0.15]]){
+    const b=new THREE.Mesh(new THREE.SphereGeometry(0.035,8,6), MAT.steelDark);
+    b.position.set(o.x+o.dir*0.16, o.y+dy, o.z+dx); g.add(b);
+  }
+  return g;
+}
+
+// ---------- complete storefront assembly (ground floor) ----------
+// entrance (recessed, double glass doors, lit header) + display windows +
+// fascia band (real Japanese name) + interior glow + pilasters + plinth skirt
+function storefront(b, fx){
+  // b: building cfg, fx: facade plane x (world), dir: +1 faces +X (left row) / -1 (right row)
+  const dir=b.dir, g=new THREE.Group();
+  const GF=4.4, W=b.w;
+  const rnd=mulberry32(b.seed+5);
+  const open=!b.closed, D=open?1:0.28;   // 2 of the 10 shops run dark/closed for variation
+  // plinth skirt (building -> sidewalk)
+  g.add(box(0.5,0.5,W,MAT.plinth, fx+dir*0.02, 0.40, b.z));
+  // open recess: dark side reveals + soffit frame a warm interior at the back.
+  // (the old solid cavity box sat IN FRONT of the glow plane and swallowed it —
+  //  that was the ghost-town bug: every storefront read as closed)
+  const revD=0.55;
+  for(const s of [-1,1])
+    g.add(box(revD,GF-0.9,0.2,MAT.frameDark, fx-dir*revD/2+dir*0.02, (GF-0.9)/2+0.5, b.z+s*(W/2-0.72)));
+  g.add(box(revD,0.28,W-1.24,MAT.frameDark, fx-dir*revD/2+dir*0.02, GF-0.72, b.z)); // soffit
+  // interior warm glow plane at the back of the recess, seen through the glass
+  const it=interiorTexture(b.seed, open?(b.warm||'#ffca7a'):'#8a6a48');
+  const glowMat=new THREE.MeshBasicMaterial({ map:it, color: open?0xffffff:0x5a4a3a });
+  regDimBasic(glowMat);
+  const glow=new THREE.Mesh(new THREE.PlaneGeometry(W-1.6, GF-1.1), glowMat);
+  glow.position.set(fx-dir*(revD-0.08), (GF-1.1)/2+0.55, b.z);
+  glow.rotation.y=dir>0? Math.PI/2 : -Math.PI/2;
+  g.add(glow);
+  // glass bays with mullions; entrance bay centered at b.doorOff
+  const bays=Math.max(3, Math.round(W/3.4));
+  const bayW=(W-1.2)/bays;
+  for(let i=0;i<bays;i++){
+    const bz=b.z-W/2+0.6+bayW*(i+0.5);
+    const isDoor=(i===b.doorBay);
+    // header beam + sill
+    g.add(box(0.14,0.18,bayW-0.06,MAT.frameDark, fx+dir*0.06, GF-0.62, bz));
+    g.add(box(0.14,0.14,bayW-0.06,MAT.frameDark, fx+dir*0.06, 0.62, bz));
+    if(isDoor){
+      // recessed double glass doors
+      const dr=box(0.06,GF-1.5,bayW-0.5,MAT.glass, fx-dir*0.18, (GF-1.5)/2+0.55, bz); g.add(dr);
+      const mid=box(0.08,GF-1.5,0.08,MAT.frameDark, fx-dir*0.18, (GF-1.5)/2+0.55, bz); g.add(mid);
+      // door handles
+      g.add(box(0.05,0.5,0.05,MAT.steelDark, fx-dir*0.12, 1.6, bz-0.18));
+      g.add(box(0.05,0.5,0.05,MAT.steelDark, fx-dir*0.12, 1.6, bz+0.18));
+      // lit header sign above door
+      const hs=wallBoard({ text:b.doorSign||'入口', bg:'#101318', fg:'#ffd98a',
+        w:1.7, h:0.5, x:fx, y:GF-0.35, z:bz, dir, dim:D });
+      g.add(hs);
+      // noren curtain on some shops (fabric divider, hangs from the entrance header)
+      if(b.noren){
+        const [nc,ng]=cnv(128,96);
+        ng.fillStyle=b.noren; ng.fillRect(0,0,128,96);
+        ng.fillStyle='rgba(255,255,255,0.92)'; ng.font=`900 44px ${CJK}`; ng.textAlign='center';
+        ng.fillText(b.norenText||'営', 64, 58);
+        const nm=new THREE.Mesh(new THREE.PlaneGeometry(bayW-0.7,0.75),
+          new THREE.MeshStandardMaterial({ map:tex(nc), side:THREE.DoubleSide, roughness:0.9 }));
+        nm.position.set(fx+dir*0.14, GF-1.15, bz); nm.rotation.y=dir>0?Math.PI/2:-Math.PI/2;
+        g.add(nm);
+        const rod=box(0.05,0.05,bayW-0.5,MAT.blackSteel, fx+dir*0.14, GF-0.78, bz); g.add(rod);
+      }
+    } else {
+      // display window glass, slightly proud of cavity
+      const gl=box(0.05,GF-1.5,bayW-0.18,MAT.glass, fx+dir*0.02, (GF-1.5)/2+0.55, bz); g.add(gl);
+      // vertical mullion
+      g.add(box(0.1,GF-1.5,0.09,MAT.frameDark, fx+dir*0.05, (GF-1.5)/2+0.55, bz+bayW/2-0.03));
+      // window sill display: small goods blocks silhouetted on the glass
+      for(let k=0;k<3;k++){
+        const gx=fx+dir*0.0, gz=bz-bayW/4+k*bayW/4;
+        g.add(box(0.22,0.22+rnd()*0.25,0.3,MAT.concrete, gx, 0.85+rnd()*0.1, gz));
+      }
+    }
+  }
+  // pilasters between bays (attached to facade plane)
+  for(let i=0;i<=bays;i++){
+    const pz=b.z-W/2+0.6+i*bayW;
+    g.add(box(0.22,GF-0.4,0.24,MAT.plinth, fx+dir*0.10, (GF-0.4)/2+0.5, pz));
+  }
+  // fascia band with the real shop name
+  const ft=fasciaTexture(b.shop, b.shopSub, b.fasciaBg, b.fasciaFg);
+  const fascia=emissiveBoard(W-0.6, 1.05, 0.12, ft, 1.65*D);
+  fascia.position.set(fx+dir*0.10, GF-0.05, b.z);
+  fascia.rotation.y=dir>0? Math.PI/2 : -Math.PI/2;
+  g.add(fascia);
+  // fascia mounting rails (visible, bolted to facade)
+  for(const dy of [-0.45,0.45])
+    g.add(box(0.1,0.08,W-0.4,MAT.blackSteel, fx+dir*0.03, GF-0.05+dy, b.z));
+  // fascia light bleeding onto the facade above + the storefront below (fake GI)
+  const bleedC=new THREE.Color(b.fasciaBg);
+  addBleed(fx+dir*0.06, GF+1.05, b.z, dir, W-0.4, 2.6, bleedC, 0.30*D);
+  addBleed(fx+dir*0.26, GF-1.9, b.z, dir, W-0.4, 2.2, bleedC, 0.20*D);
+  // warm spill light in front of the entrance — washes sidewalk, facade, road edge
+  if(open){
+    const p=new THREE.PointLight(new THREE.Color(b.warm||'#ffca7a'), 0, 24, 1.7);
+    p.position.set(fx+dir*1.6, 3.0, b.z); scene.add(p); shopLights.push(p);
+  }
+  // warm spill streak on the wet road in front of the shop
+  addStreak(fx+dir*1.4, b.z, 9, new THREE.Color(b.warm||'#ffca7a'), 0.20*D, 2.6);
+  return g;
+}
+
+// ---------- commercial building: body + storefront + kanban ----------
+function makeBuilding(b){
+  const g=new THREE.Group();
+  const depth=10, cx=b.x + (b.dir>0? -depth/2 : depth/2); // center behind facade
+  const fx=b.x; // facade plane
+  const ft=facadeTexture({ w:b.w, h:b.h, stories:b.stories, tint:b.tint, seed:b.seed, lit:0.5 });
+  const sideMat=new THREE.MeshStandardMaterial({ color:0x1d2330, roughness:0.85 });
+  const facMat=new THREE.MeshStandardMaterial({ map:ft, roughness:0.8 });
+  const topMat=new THREE.MeshStandardMaterial({ color:0x15171e, roughness:0.95 });
+  // material order: +x,-x,+y,-y,+z,-z
+  const mats = b.dir>0 ? [facMat, sideMat, topMat, topMat, sideMat, sideMat]
+                       : [sideMat, facMat, topMat, topMat, sideMat, sideMat];
+  const body=new THREE.Mesh(new THREE.BoxGeometry(depth, b.h, b.w), mats);
+  body.position.set(cx, b.h/2, b.z); body.castShadow=true; body.receiveShadow=true; g.add(body);
+  // parapet + cornice
+  g.add(box(depth+0.4,0.5,b.w+0.4,MAT.plinth, cx, b.h+0.25, b.z));
+  // rooftop AC boxes (attached to roof, with curb skirts)
+  const rnd=mulberry32(b.seed+9);
+  for(let i=0;i<2;i++){
+    const ax=cx+(rnd()-0.5)*depth*0.5, az=b.z+(rnd()-0.5)*b.w*0.5;
+    g.add(box(1.4,0.9,1.0,MAT.steelDark, ax, b.h+0.9, az));
+    g.add(box(1.6,0.18,1.2,MAT.plinth, ax, b.h+0.55, az));
+  }
+  // downspout pipe on the facade (real Japanese streets have them)
+  g.add(box(0.12,b.h-1,0.12,MAT.steelDark, fx+b.dir*0.10, (b.h-1)/2+0.5, b.z+b.w/2-0.8));
+  // complete ground-floor storefront
+  g.add(storefront(b, fx));
+  // tate-kanban (perpendicular, bracket-mounted)
+  for(const k of (b.kanban||[]))
+    g.add(tateKanban({ x:fx, dir:b.dir, z:b.z+k.dz, y:k.y, w:k.w||0.85, h:k.h||3.6,
+      text:k.text, sub:k.sub, bg:k.bg, fg:k.fg, dim: b.closed?0.28:1 }));
+  // flat wall boards (bolted to facade)
+  for(const wb of (b.wallBoards||[]))
+    g.add(wallBoard({ x:fx, dir:b.dir, z:b.z+wb.dz, y:wb.y, w:wb.w, h:wb.h,
+      text:wb.text, sub:wb.sub, bg:wb.bg, fg:wb.fg, vertical:wb.vertical, dim: b.closed?0.28:1 }));
+  scene.add(g);
+  return g;
+}
+
+// ---------- start/finish arch: red neon 一番街 gantry on REAL supports ----------
+// Real-world reference: the Kabukicho "歌舞伎町一番街" arch — double red neon
+// tube arc spanning the road, center sign panel, carried on steel pylons
+// bolted to the sidewalks (not hung from buildings, not floating).
+function buildArch(){
+  const g=new THREE.Group();
+  const AZ=-35;                 // arch plane z
+  const PX=8.2, TOP=9.6;        // pylon x, arch crown height
+  // pylon columns: dark steel box columns with base plates bolted to the sidewalk
+  for(const s of [-1,1]){
+    const px=s*PX;
+    const col=box(0.7,TOP,0.7,MAT.blackSteel, px, 0.15+TOP/2, AZ); g.add(col);
+    const collar1=box(0.9,0.5,0.9,MAT.steelDark, px, 2.2, AZ); g.add(collar1);
+    const collar2=box(0.9,0.5,0.9,MAT.steelDark, px, TOP-1.2, AZ); g.add(collar2);
+    // base plate + anchor bolts (real mount on the sidewalk top y=0.15)
+    g.add(box(1.3,0.18,1.3,MAT.steelDark, px, 0.24, AZ));
+    for(const [bx,bz] of [[-0.45,-0.45],[0.45,-0.45],[-0.45,0.45],[0.45,0.45]])
+      g.add(box(0.12,0.22,0.12,MAT.steelDark, px+bx, 0.32, AZ+bz));
+    // diagonal brace from column to arch spring point
+    const brace=new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.09,2.6,8), MAT.blackSteel);
+    brace.position.set(px-s*0.75, TOP-0.6, AZ); brace.rotation.z=s*0.6; brace.castShadow=true; g.add(brace);
+  }
+  // double red neon tube arc (two parallel tubes, offset in z)
+  for(const dz of [-0.35, 0.35]){
+    const pts=[];
+    for(let i=0;i<=24;i++){
+      const t=i/24, x=-PX+2*PX*t;
+      const y=2.6 + (TOP-2.2)*Math.sin(Math.PI*Math.pow(t,0.92)) + 0.15;
+      pts.push(new THREE.Vector3(x, y, AZ+dz));
+    }
+    const tube=new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 48, 0.14, 10),
+      MAT.neonTube);
+    g.add(tube);
+    // inner second line of the double-tube look
+    const pts2=pts.map(p=>new THREE.Vector3(p.x, p.y-0.55, p.z));
+    const tube2=new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts2), 48, 0.09, 8),
+      MAT.neonRed);
+    g.add(tube2);
+  }
+  // center sign panel: dark board, red neon border, warm-white 歌舞伎町一番街
+  const [pc,pg]=cnv(1024,220);
+  pg.fillStyle='#0d0f14'; pg.fillRect(0,0,1024,220);
+  const pgrad=pg.createLinearGradient(0,0,0,220);
+  pgrad.addColorStop(0,'rgba(255,60,60,0.20)'); pgrad.addColorStop(0.5,'rgba(0,0,0,0)'); pgrad.addColorStop(1,'rgba(255,60,60,0.20)');
+  pg.fillStyle=pgrad; pg.fillRect(0,0,1024,220);
+  pg.strokeStyle='#ff3030'; pg.lineWidth=10; pg.strokeRect(14,14,996,192);
+  pg.fillStyle='#fff2e2'; pg.textAlign='center'; pg.textBaseline='middle';
+  pg.font=`900 104px ${CJK}`;
+  pg.fillText('歌舞伎町一番街', 512, 112);
+  const panel=emissiveBoard(7.4, 1.6, 0.22, tex(pc), 1.9);
+  panel.position.set(0, TOP-0.7, AZ); g.add(panel);
+  // red neon border tubes around the panel (real tube path)
+  const bw=7.4, bh=1.6, bx=0, by=TOP-0.7;
+  const rect=[ new THREE.Vector3(bx-bw/2-0.12,by-bh/2-0.12,AZ),
+               new THREE.Vector3(bx+bw/2+0.12,by-bh/2-0.12,AZ),
+               new THREE.Vector3(bx+bw/2+0.12,by+bh/2+0.12,AZ),
+               new THREE.Vector3(bx-bw/2-0.12,by+bh/2+0.12,AZ),
+               new THREE.Vector3(bx-bw/2-0.12,by-bh/2-0.12,AZ) ];
+  g.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(rect,true), 32, 0.07, 8), MAT.neonRed));
+  // hanger rods: panel hangs from the arch tubes on real rods
+  for(const hx of [-2.6, 0, 2.6])
+    g.add(box(0.07, 1.15, 0.07, MAT.blackSteel, hx, TOP+0.35, AZ));
+  // small white downlights under the panel washing the start line
+  for(const hx of [-2.6, 0, 2.6]){
+    const dl=new THREE.Mesh(new THREE.ConeGeometry(0.16,0.22,10), MAT.blackSteel);
+    dl.position.set(hx, by-bh/2-0.25, AZ); g.add(dl);
+  }
+  // long red streak on the wet asphalt under the arch (the mirror-rain look)
+  addStreak(0, AZ, 26, 0xff2a2a, 0.5, 7.5);
+  addStreak(-4.5, AZ, 18, 0xff2a2a, 0.3, 2.2);
+  addStreak(4.5, AZ, 18, 0xff2a2a, 0.3, 2.2);
+  scene.add(g);
+}
+
+// ---------- Japanese cobra street lamps ----------
+function buildLamps(){
+  const spots=[[-8.2,-20,1],[8.2,-50,-1],[-8.2,-80,1]];
+  for(const [x,z,armDir] of spots){
+    const g=new THREE.Group();
+    g.add(box(0.5,0.25,0.5,MAT.steelDark, x, 0.28, z));            // base plate
+    const pole=new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.13,8,10), MAT.steelDark);
+    pole.position.set(x,4.15,z); pole.castShadow=true; g.add(pole);
+    const armCurve=new THREE.QuadraticBezierCurve3(
+      new THREE.Vector3(x,7.9,z), new THREE.Vector3(x+armDir*1.1,8.15,z), new THREE.Vector3(x+armDir*2.1,7.7,z));
+    g.add(new THREE.Mesh(new THREE.TubeGeometry(armCurve,12,0.06,8), MAT.steelDark));
+    g.add(box(0.9,0.16,0.3,MAT.blackSteel, x+armDir*2.1, 7.62, z)); // head
+    const lensMat=new THREE.MeshBasicMaterial({ color:0xfff0d8 }); regDimBasic(lensMat);
+    const lens=new THREE.Mesh(new THREE.PlaneGeometry(0.7,0.22), lensMat);
+    lens.rotation.x=Math.PI/2; lens.position.set(x+armDir*2.1, 7.52, z); g.add(lens);
+    addStreak(x+armDir*1.2, z, 12, 0xffe6c0, 0.30, 1.8);
+    scene.add(g);
+  }
+}
+
+// ---------- utility poles + catenary wires (real crossarm attachment points) ----------
+const wireMat = new THREE.MeshBasicMaterial({ color:0x050507 });
+function catenary(a, b, sag, radius=0.025){
+  const mid=new THREE.Vector3().addVectors(a,b).multiplyScalar(0.5); mid.y-=sag;
+  const mesh=new THREE.Mesh(new THREE.TubeGeometry(
+    new THREE.QuadraticBezierCurve3(a,mid,b), 20, radius, 6), wireMat);
+  scene.add(mesh);
+}
+function buildPoles(){
+  const V=(x,y,z)=>new THREE.Vector3(x,y,z);
+  const zs=[-14,-34,-54,-74];
+  for(const z of zs){
+    const g=new THREE.Group();
+    const p=new THREE.Mesh(new THREE.CylinderGeometry(0.14,0.18,9.5,10), MAT.poleConc);
+    p.position.set(-9.6,4.9,z); p.castShadow=true; g.add(p);
+    g.add(box(0.35,0.3,0.35,MAT.poleConc, -9.6, 0.3, z));          // base skirt
+    for(const cy of [8.6, 8.0]) g.add(box(1.6,0.09,0.09,MAT.poleConc, -9.6, cy, z)); // crossarms
+    for(const ix of [-10.25,-8.95]) g.add(box(0.12,0.22,0.12,MAT.poleConc, ix, 8.75, z)); // insulators
+    scene.add(g);
+  }
+  for(let i=0;i<zs.length-1;i++)
+    for(const dx of [-0.65, 0.65])
+      catenary(V(-9.6+dx,8.6,zs[i]), V(-9.6+dx,8.6,zs[i+1]), 1.2);
+}
+
+// ---------- vending machines (glowing 飲料 front, base-plate skirt) ----------
+function vendingMachine(x,z,rotY,seed){
+  const g=new THREE.Group();
+  g.add(box(1.1,0.12,0.9,MAT.plinth, 0, 0.21, 0));                 // base plate skirt
+  const bodyM=new THREE.MeshStandardMaterial({ color:0xb8202a, roughness:0.4, metalness:0.2 });
+  const body=new THREE.Mesh(new THREE.BoxGeometry(1.0,1.9,0.75), bodyM);
+  body.position.y=1.16; body.castShadow=true; g.add(body);
+  const [c,gg]=cnv(128,192); const rnd=mulberry32(seed);
+  gg.fillStyle='#0a0c10'; gg.fillRect(0,0,128,192);
+  gg.fillStyle='#cfe8ff'; gg.font=`900 30px ${CJK}`; gg.textAlign='center';
+  gg.fillText('飲料', 64, 34);
+  for(let r=0;r<4;r++) for(let i=0;i<4;i++){
+    gg.fillStyle=`hsl(${rnd()*360},70%,55%)`; gg.fillRect(12+i*27, 52+r*32, 20, 26);
+  }
+  gg.fillStyle='#0a0c10'; gg.fillRect(0,176,128,16);
+  const frontMat=new THREE.MeshBasicMaterial({ map:tex(c) }); regDimBasic(frontMat);
+  const front=new THREE.Mesh(new THREE.PlaneGeometry(0.86,1.5), frontMat);
+  front.position.set(0,1.28,0.381); g.add(front);
+  addStreak(x, z, 5, 0x9fd0ff, 0.18, 1.2);
+  g.position.set(x,0.15,z); g.rotation.y=rotY; scene.add(g);
+}
+
+// ---------- pedestrians (simple figures on base plates) ----------
+function pedestrian(x,z,rotY,seed){
+  const rnd=mulberry32(seed);
+  const g=new THREE.Group();
+  g.add(box(0.5,0.06,0.5,MAT.plinth, 0, 0.18, 0));                 // base plate
+  const coat=[0x2a3444,0x4a2a30,0x30363f,0x39424f][seed%4];
+  const cm=new THREE.MeshStandardMaterial({ color:coat, roughness:0.9 });
+  const bodyM=new THREE.Mesh(new THREE.CapsuleGeometry(0.17,0.75,4,8), cm);
+  bodyM.position.y=0.85; bodyM.castShadow=true; g.add(bodyM);
+  const head=new THREE.Mesh(new THREE.SphereGeometry(0.12,10,8),
+    new THREE.MeshStandardMaterial({ color:0xd8b596, roughness:0.8 }));
+  head.position.y=1.52; head.castShadow=true; g.add(head);
+  g.position.set(x,0.15,z); g.rotation.y=rotY; scene.add(g);
+}
+
+// ---------- distant skyline silhouette ----------
+function buildSkyline(){
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(700,90),
+    new THREE.MeshBasicMaterial({ map:skylineTexture(), transparent:true, fog:false, depthWrite:false }));
+  m.position.set(0,32,-215); scene.add(m);
+  const skyMat=new THREE.MeshBasicMaterial({ map:skyTexture(true), side:THREE.BackSide, fog:false, depthWrite:false });
+  const dome=new THREE.Mesh(new THREE.SphereGeometry(380,32,20), skyMat);
+  dome.position.set(0,0,-60); scene.add(dome);
+  window.__sp2sky={ skyMat, day:skyTexture(false), night:skyMat.map };
+}
+
+// ---------- district data: real Japanese business names only ----------
+// (word bank cross-checked against the Kabukicho / Dotonbori / Ikebukuro photo refs)
+const BUILDINGS=[
+ // west row (facade x=-12.5, faces +X)
+ { x:-12.5, dir:1, z:-12, w:14, h:18, stories:5, seed:11, tint:'#181d29',
+   shop:'お好み焼き', shopSub:'本陣 HONJIN', fasciaBg:'#b02818', fasciaFg:'#ffe9d2',
+   doorBay:2, noren:'#7a1a12', norenText:'本',
+   kanban:[ {dz:-4.2,y:7.6,h:4.4,text:'お好み焼き',bg:'#b02818',fg:'#ffe9d2'},
+            {dz: 3.8,y:6.4,h:3.2,text:'本陣',bg:'#101318',fg:'#ffd98a'} ],
+   wallBoards:[ {dz:0,y:8.6,w:3.4,h:1.0,text:'2F 宴会場',bg:'#101318',fg:'#cfe0ff'} ] },
+ { x:-12.5, dir:1, z:-28, w:12, h:12, stories:3, seed:12, tint:'#1a2030',
+   shop:'銀八鮨', shopSub:'GINPACHI SUSHI', fasciaBg:'#123a6a', fasciaFg:'#e8f2ff',
+   doorBay:1, warm:'#ffd9a0', closed:true,
+   kanban:[ {dz:-3.4,y:6.2,h:3.6,text:'寿司',bg:'#123a6a',fg:'#e8f2ff'} ],
+   wallBoards:[ {dz:2.8,y:7.4,w:2.6,h:0.9,text:'から汁酒場',bg:'#0e141c',fg:'#ffb35e'} ] },
+ { x:-12.5, dir:1, z:-44, w:14, h:22, stories:6, seed:13, tint:'#20242f',
+   shop:'カラオケ館', shopSub:'KARAOKE 24H', fasciaBg:'#a01248', fasciaFg:'#ffe4f0',
+   doorBay:3, warm:'#ffc4da',
+   kanban:[ {dz:-4.4,y:8.2,h:4.6,text:'カラオケ',bg:'#a01248',fg:'#ffe4f0'},
+            {dz: 4.0,y:7.0,h:3.4,text:'24時間',bg:'#0e2a6a',fg:'#e3ecff'} ] },
+ { x:-12.5, dir:1, z:-60, w:12, h:15, stories:4, seed:14, tint:'#1c1a20',
+   shop:'大阪王将', shopSub:'餃子', fasciaBg:'#c02818', fasciaFg:'#fff4e0',
+   doorBay:2, noren:'#a02010', norenText:'餃',
+   kanban:[ {dz:-3.2,y:6.6,h:3.6,text:'餃子',bg:'#c02818',fg:'#fff4e0'} ],
+   wallBoards:[ {dz:3.0,y:8.2,w:3.0,h:0.9,text:'Pasta & Pizza',bg:'#101318',fg:'#ffe9c9'} ] },
+ { x:-12.5, dir:1, z:-76, w:14, h:20, stories:5, seed:15, tint:'#1a1e28',
+   shop:'ツルハドラッグ', shopSub:'薬 免税 Tax-Free', fasciaBg:'#c01828', fasciaFg:'#ffffff',
+   doorBay:2, warm:'#fff0d8',
+   kanban:[ {dz:-4.2,y:7.8,h:4.2,text:'薬',bg:'#c01828',fg:'#ffffff'},
+            {dz: 4.2,y:6.8,h:3.2,text:'免税',bg:'#0e3fa0',fg:'#e3ecff'} ],
+   wallBoards:[ {dz:0,y:9.4,w:3.6,h:1.0,text:'大阪土産',bg:'#101318',fg:'#ffe9c9'} ] },
+ // east row (facade x=+12.5, faces -X)
+ { x:12.5, dir:-1, z:-10, w:14, h:16, stories:4, seed:21, tint:'#1e2230',
+   shop:'居酒屋', shopSub:'新大門 SHINDAIMON', fasciaBg:'#4a2410', fasciaFg:'#ffd98a',
+   doorBay:1, noren:'#2a1a10', norenText:'酒', doorSign:'入口',
+   kanban:[ {dz:-4.2,y:7.2,h:4.0,text:'居酒屋',bg:'#4a2410',fg:'#ffd98a'} ],
+   wallBoards:[ {dz:3.6,y:7.8,w:2.8,h:0.9,text:'すすや',bg:'#101318',fg:'#ffe9d2'} ] },
+ { x:12.5, dir:-1, z:-26, w:12, h:26, stories:7, seed:22, tint:'#232030',
+   shop:'パチンコ', shopSub:'PACHINKO', fasciaBg:'#8a1010', fasciaFg:'#ffe36a',
+   doorBay:2, warm:'#ffe9a0',
+   kanban:[ {dz:-3.4,y:8.6,h:4.8,text:'パチンコ',bg:'#8a1010',fg:'#ffe36a'},
+            {dz: 3.6,y:7.4,h:3.4,text:'ヒボンバーグ',bg:'#101318',fg:'#ff9a5e'} ] },
+ { x:12.5, dir:-1, z:-42, w:14, h:13, stories:3, seed:23, tint:'#1c2029',
+   shop:'焼肉', shopSub:'牛角 GYUKAKU', fasciaBg:'#701818', fasciaFg:'#ffd9a0',
+   doorBay:3, noren:'#401010', norenText:'肉',
+   kanban:[ {dz:-4.2,y:6.6,h:3.8,text:'焼肉',bg:'#701818',fg:'#ffd9a0'} ],
+   wallBoards:[ {dz:3.8,y:7.6,w:3.0,h:0.9,text:'バンダイ',bg:'#0e2a6a',fg:'#ffffff'} ] },
+ { x:12.5, dir:-1, z:-58, w:12, h:18, stories:5, seed:24, tint:'#201e28',
+   shop:'喫茶店', shopSub:'珈琲館', fasciaBg:'#efe6d0', fasciaFg:'#2a2018',
+   doorBay:1, warm:'#ffdfae', closed:true,
+   kanban:[ {dz:-3.2,y:7.0,h:3.8,text:'喫茶店',bg:'#efe6d0',fg:'#2a2018'} ] },
+ { x:12.5, dir:-1, z:-74, w:14, h:21, stories:6, seed:25, tint:'#1a1e26',
+   shop:'ラーメン', shopSub:'すすや', fasciaBg:'#c33d08', fasciaFg:'#ffe9c9',
+   doorBay:2, noren:'#b03008', norenText:'麺',
+   kanban:[ {dz:-4.2,y:8.0,h:4.4,text:'ラーメン',bg:'#c33d08',fg:'#ffe9c9'},
+            {dz: 4.2,y:6.6,h:3.0,text:'うどん',bg:'#0a7a3a',fg:'#e2ffe9'} ] },
+];
+
+// ---------- day/night ----------
+function setNight(on){
+  document.getElementById('btn-night').classList.toggle('on', on);
+  document.getElementById('btn-day').classList.toggle('on', !on);
+  if (on){
+    scene.background.set(0x05070e); scene.fog.color.set(0x05070e);
+    // night ambient: strong enough that no facade or road reads pitch black
+    // (real night street with this many emitters has real bounce light)
+    hemi.intensity=0.9; hemi.color.set(0x46547e); hemi.groundColor.set(0x161220);
+    moon.intensity=0.55; sun.intensity=0.0;
+    archGlow.intensity=60; shopLights.forEach(p=>p.intensity=26);
+    lampLights.forEach(p=>p.intensity=26); blueFill.intensity=26;
+    renderer.toneMappingExposure=1.35;
+    window.__sp2sky.skyMat.map=window.__sp2sky.night;
+  } else {
+    scene.background.set(0x9fc3e8); scene.fog.color.set(0x9fc3e8);
+    hemi.intensity=1.25; hemi.color.set(0xbfd9ff); hemi.groundColor.set(0x6a7078);
+    moon.intensity=0.0; sun.intensity=3.6;
+    archGlow.intensity=0; shopLights.forEach(p=>p.intensity=0);
+    lampLights.forEach(p=>p.intensity=0); blueFill.intensity=0;
+    renderer.toneMappingExposure=1.0;
+    window.__sp2sky.skyMat.map=window.__sp2sky.day;
+  }
+  window.__sp2sky.skyMat.needsUpdate=true;
+  applyDim(on);
+  window.__sp.night=on;
+}
+document.getElementById('btn-day').onclick=()=>setNight(false);
+document.getElementById('btn-night').onclick=()=>setNight(true);
+
+// ---------- orbit (showroom pattern) ----------
+const orbit={ theta:0.0, phi:1.62, radius:20, target:new THREE.Vector3(0,3,-18), auto:false };
+let dragging=false, px=0, py=0;
+canvas.addEventListener('pointerdown', e=>{ dragging=true; px=e.clientX; py=e.clientY; orbit.auto=false; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', e=>{
+  if(!dragging) return;
+  orbit.theta-=(e.clientX-px)*0.007;
+  orbit.phi=THREE.MathUtils.clamp(orbit.phi-(e.clientY-py)*0.007, 0.12, Math.PI-0.08);
+  px=e.clientX; py=e.clientY;
+});
+canvas.addEventListener('pointerup', ()=>{ dragging=false; });
+canvas.addEventListener('pointercancel', ()=>{ dragging=false; });
+canvas.addEventListener('wheel', e=>{
+  e.preventDefault();
+  orbit.radius=THREE.MathUtils.clamp(orbit.radius*(1+Math.sign(e.deltaY)*0.1), 4, 200);
+  orbit.auto=false;
+}, { passive:false });
+
+// street view: low on the road, vanishing point down the straight through the arch
+function streetView(){
+  orbit.target.set(0, 3.2, -20);
+  orbit.theta=0.0; orbit.phi=1.62; orbit.radius=21; orbit.auto=false;
+}
+function setView(theta, phi, radius, tx, ty, tz){
+  orbit.theta=theta; orbit.phi=phi; orbit.radius=radius;
+  orbit.target.set(tx,ty,tz); orbit.auto=false;
+}
+document.getElementById('btn-cam').onclick=streetView;
+
+function sizeRenderer(){
+  const w=window.innerWidth, h=window.innerHeight;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
+  renderer.setSize(w, h, false);
+  camera.aspect=w/h; camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', sizeRenderer);
+
+// ---------- assembly ----------
+function build(){
+  buildGround();
+  buildSkyline();
+  buildArch();
+  buildLamps();
+  buildPoles();
+  for(const b of BUILDINGS) makeBuilding(b);
+  vendingMachine(-11.2,-20, Math.PI/2, 31);
+  vendingMachine(-11.2,-21.4, Math.PI/2, 32);
+  vendingMachine(11.2,-48, -Math.PI/2, 33);
+  // a few spectators on the sidewalks (post-rain evening crowd)
+  pedestrian(9.8,-16, 2.6, 0); pedestrian(10.2,-17.2, -0.8, 1);
+  pedestrian(-9.8,-31, 1.4, 2); pedestrian(9.8,-52, -1.2, 3);
+  pedestrian(-10.1,-64, 0.6, 4);
+  // traffic cones near the arch pylons (on the curb)
+  for(const [x,z] of [[-7.6,-33.4],[-7.2,-36.6],[7.6,-33.4],[7.2,-36.6]]){
+    const cone=new THREE.Mesh(new THREE.ConeGeometry(0.16,0.5,10),
+      new THREE.MeshStandardMaterial({ color:0xd8542a, roughness:0.7 }));
+    cone.position.set(x,0.4,z); cone.castShadow=true; scene.add(cone);
+    scene.add(box(0.34,0.05,0.34,MAT.plinth, x, 0.18, z));
+  }
+}
+
+function loop(){
+  requestAnimationFrame(loop);
+  if (orbit.auto) orbit.theta+=0.003;
+  const sp=Math.sin(orbit.phi);
+  camera.position.set(
+    orbit.target.x+orbit.radius*sp*Math.sin(orbit.theta),
+    orbit.target.y+orbit.radius*Math.cos(orbit.phi),
+    orbit.target.z+orbit.radius*sp*Math.cos(orbit.theta));
+  camera.lookAt(orbit.target);
+  renderer.render(scene, camera);
+}
+
+window.__sp={ night:true, ready:false, setNight, streetView, setView, scene, camera,
+  state:()=>({ ready:window.__sp.ready, night:window.__sp.night,
+    objects:scene.children.length,
+    cam:camera.position.toArray().map(v=>+v.toFixed(2)) }) };
+
+sizeRenderer();
+build();            // creates window.__sp2sky before setNight touches it
+setNight(true);
+streetView();
+window.__sp.ready=true;
+statusEl.textContent='ready — procedural neon straight · 10 shops · S/F arch';
+loop();
+</script>
+</body>
+</html>

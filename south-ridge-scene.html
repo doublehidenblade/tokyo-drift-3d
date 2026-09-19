@@ -1,0 +1,1293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>South Ridge — Night Mountain Touge · 3D Diorama</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:#05070c;overflow:hidden}
+  #view{display:block;width:100vw;height:100vh;cursor:grab;touch-action:none}
+  #view:active{cursor:grabbing}
+  #hud{position:fixed;top:12px;left:14px;color:#fff;font:13px/1.5 system-ui,sans-serif;
+    text-shadow:0 1px 4px #000;pointer-events:none;z-index:5}
+  #hud b{font-size:15px;letter-spacing:.5px}
+  #bar{position:fixed;top:12px;right:14px;z-index:6;display:flex;gap:8px}
+  #bar button{background:rgba(20,24,32,.85);color:#fff;border:1px solid #3a4356;border-radius:8px;
+    padding:9px 14px;font-size:13px;cursor:pointer}
+  #bar button.on{background:#1c3a5e;border-color:#58a6ff}
+  #status{position:fixed;bottom:12px;left:14px;color:#9aa4b5;font:12px system-ui,sans-serif;
+    text-shadow:0 1px 3px #000;z-index:5}
+  #hint{position:fixed;bottom:12px;right:14px;color:#9aa4b5;font:12px system-ui,sans-serif;z-index:5}
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="hud"><b>South Ridge — Night Mountain Touge</b><br><span id="sub">static scene · orbit showroom · v2 ridge rebuild</span></div>
+<div id="bar">
+  <button id="btn-day">☀ Day</button>
+  <button id="btn-night" class="on">🌙 Night</button>
+  <button id="btn-cam">📷 Street view</button>
+</div>
+<div id="status">loading…</div>
+<div id="hint">drag to orbit · scroll to zoom</div>
+
+<script type="module">
+import * as THREE from './vendor/three.module.js';
+
+const statusEl = document.getElementById('status');
+const canvas = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.NoToneMapping;   // ACES applied once in the composite pass
+renderer.shadowMap.enabled = true;            // dynamic shadows only — nothing baked
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x060a18);
+scene.fog = new THREE.Fog(0x060a18, 60, 200);
+
+const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 700);
+
+// ---------- seeded prng ----------
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+function clamp(v,a,b){return Math.min(b,Math.max(a,v));}
+function lerp(a,b,t){return a+(b-a)*t;}
+function shade(hex,f){const n=parseInt(hex.slice(1),16);const r=Math.min(255,((n>>16)&255)*f)|0,g=Math.min(255,((n>>8)&255)*f)|0,b=Math.min(255,(n&255)*f)|0;return `rgb(${r},${g},${b})`;}
+const CJK_FONT = '"Noto Sans CJK JP","Noto Sans CJK SC","Noto Sans CJK TC",sans-serif';
+const CJK_SERIF = '"Noto Serif CJK JP","Noto Serif CJK SC",serif';
+
+// deterministic value noise (2D)
+function makeNoise(seed){
+  const r = mulberry32(seed), perm = new Uint8Array(512);
+  const p = [...Array(256).keys()];
+  for(let i=255;i>0;i--){ const j=(r()*(i+1))|0; [p[i],p[j]]=[p[j],p[i]]; }
+  for(let i=0;i<512;i++) perm[i]=p[i&255];
+  const g2=(h,x,y)=>{ switch(h&3){case 0:return x+y;case 1:return -x+y;case 2:return x-y;default:return -x-y;} };
+  return (x,y)=>{
+    const X=Math.floor(x)&255, Y=Math.floor(y)&255;
+    x-=Math.floor(x); y-=Math.floor(y);
+    const u=x*x*(3-2*x), v=y*y*(3-2*y);
+    const a=perm[X]+Y, b=perm[X+1]+Y;
+    return lerp(
+      lerp(g2(perm[a],x,y),     g2(perm[b],x-1,y), u),
+      lerp(g2(perm[a+1],x,y-1), g2(perm[b+1],x-1,y-1), u), v)*0.7071;
+  };
+}
+const vnoise = makeNoise(1337);
+
+// ---------- world layout: road spine ----------
+// road bends right then straightens into the tunnel portal at z=-30 (x=0, y=1.8)
+function roadX(z){ if(z<=-30) return 0; return 3.2*(1-Math.cos(0.12*(z+30))); }
+function roadY(z){ if(z<=-30) return 1.8; return 1.8*(26-z)/56; }
+function roadYaw(z){ // direction of travel is -z; yaw about Y
+  if(z<=-30) return 0;
+  return Math.atan(3.2*0.12*Math.sin(0.12*(z+30)));
+}
+
+// ---------- terrain height: mountain mass with the tunnel bored through ----------
+// smoothstep helper (0..1) and smooth-maximum (no crease lines, no box edges)
+function ss01(t){ t=clamp(t,0,1); return t*t*(3-2*t); }
+function smax(a,b,k){ return Math.log(Math.exp(k*a)+Math.exp(k*b))/k; }
+// Mountain mass behind the portal: a sloped, irregular ridgeline — never a box.
+// (a) rock sheath: a smooth dome of solid rock directly over the bore (≥16 m over
+//     the 12 m portal face / 9.1 m tube crown), with soft irregular edges;
+// (b) ridge: rises behind the portal on an off-centre, noise-broken crest that
+//     drifts left as it goes back, falling harder to the valley side (+x),
+//     like the approved ridge mock.
+function mountainMass(x, z){
+  if (z > -24) return 0;
+  // (a) sheath over the bore
+  const fx = 1 - ss01((Math.abs(x)-10)/16);   // full for |x|<10, gone by |x|=26
+  const fzA = 1 - ss01((z+31.5)/1.2);         // full by z=-31.5 (behind the face), gone at z=-30.3
+  const fzB = 1 - ss01((-58-z)/8);            // full to z=-58, gone by z=-66
+  const sheath = 16.4*fx*fzA*fzB;
+  // (b) ridgeline rising behind the portal
+  const back = clamp((-32-z)/32, 0, 1);       // 0 at z=-32 → 1 at z=-64
+  const crestX = -12 - back*10 + (vnoise(z*0.05+4.2, 8.8)-0.5)*26*back;
+  const rw = 20 + back*16;
+  const ridge = (10 + back*34) * Math.exp(-Math.pow((x-crestX)/rw, 2))
+              * (0.78 + 0.5*vnoise(x*0.045+2.1, z*0.045));
+  const asym = x > crestX ? Math.exp(-Math.pow((x-crestX)/32, 2)*1.6) : 1;
+  const frontFade = ss01((-30-z)/6);          // the ridge only exists behind the portal
+  return smax(sheath, ridge*asym*frontFade, 0.55);
+}
+function terrainH(x, z){
+  const zc = clamp(z, -30, 26);
+  const xc = roadX(zc), yr = roadY(zc);
+  const d = x - xc, ad = Math.abs(d);
+  const t = clamp((ad-6.5)/46, 0, 1);
+  const side = Math.pow(t, 1.55);
+  let h = yr + side*38 - 0.3;
+  if (d > 0){ // right side: gentler rise, falls to a distant valley
+    h = yr + side*30 - 0.3;
+    if (ad > 42) h -= (ad-42)*0.38;
+  }
+  h += mountainMass(x, z);                                 // sloped mountain mass, never a box
+  if (z > -31 && ad < 6.5) h = Math.min(h, yr - 0.25);      // road corridor (carves last)
+  if (z > -34 && z < -22 && d < -6.0 && d > -11)            // rock cut by the portal (mountain side only)
+    h = Math.max(h, yr + 3.4);
+  let damp = 1;
+  if (z > -31 && ad < 8) damp = 0.15;
+  if (z <= -28 && z >= -64 && ad < 22)                    // smooth rock directly over the bore,
+    damp = Math.min(damp, 0.25 + 0.75*ss01((ad-9)/11));   // rugged flanks further out
+  const n = vnoise(x*0.045, z*0.045)*2.4 + vnoise(x*0.16, z*0.16)*0.8;
+  h += n * damp * (0.35 + side*1.2);
+  return h;
+}
+
+// ---------- procedural canvas textures ----------
+// REAL Japanese text only. No glyph-stroke fallbacks anywhere: if the CJK font
+// were ever missing, a sign renders blank rather than nonsense glyphs.
+function stoneTexture(){
+  const c=document.createElement('canvas'); c.width=1024; c.height=640;
+  const g=c.getContext('2d'), rnd=mulberry32(41);
+  g.fillStyle='#878c93'; g.fillRect(0,0,1024,640);
+  const rows=8, rh=640/rows;
+  for(let r=0;r<rows;r++){
+    let x = (r%2)*-60;
+    while(x<1024){
+      const bw=150+rnd()*90;
+      const f=0.68+rnd()*0.55;
+      g.fillStyle=shade('#8d9299',f); g.fillRect(x+3,r*rh+3,bw-6,rh-6);
+      // block face variation
+      for(let i=0;i<26;i++){
+        g.fillStyle=`rgba(${40+rnd()*40|0},${42+rnd()*40|0},${46+rnd()*40|0},0.10)`;
+        g.fillRect(x+3+rnd()*(bw-12), r*rh+3+rnd()*(rh-12), 3+rnd()*8, 2+rnd()*5);
+      }
+      x+=bw;
+    }
+  }
+  g.strokeStyle='rgba(30,32,36,0.95)'; g.lineWidth=6;
+  for(let r=0;r<=rows;r++){ g.beginPath(); g.moveTo(0,r*rh); g.lineTo(1024,r*rh); g.stroke(); }
+  // weathering streaks
+  for(let i=0;i<40;i++){
+    const x=rnd()*1024, w=6+rnd()*22, l=60+rnd()*260;
+    const gr=g.createLinearGradient(0,0,0,l);
+    gr.addColorStop(0,'rgba(30,32,34,0.28)'); gr.addColorStop(1,'rgba(30,32,34,0)');
+    g.fillStyle=gr;
+    g.save(); g.translate(x,rnd()*200); g.fillRect(-w/2,0,w,l); g.restore();
+  }
+  // moss near the base
+  for(let i=0;i<300;i++){
+    g.fillStyle=`rgba(${40+rnd()*30|0},${70+rnd()*40|0},${40+rnd()*25|0},${0.12+rnd()*0.22})`;
+    g.fillRect(rnd()*1024, 560+rnd()*80, 2+rnd()*7, 2+rnd()*5);
+  }
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=8;
+  t.wrapS=t.wrapT=THREE.RepeatWrapping;
+  return t;
+}
+function asphaltTexture(){
+  const c=document.createElement('canvas'); c.width=256; c.height=2048;
+  const g=c.getContext('2d'), rnd=mulberry32(97);
+  g.fillStyle='#22252b'; g.fillRect(0,0,256,2048);
+  for(let i=0;i<9000;i++){
+    const v=28+rnd()*46;
+    g.fillStyle=`rgba(${v|0},${v+2|0},${v+7|0},0.5)`;
+    g.fillRect(rnd()*256, rnd()*2048, 1+rnd()*2, 1+rnd()*2);
+  }
+  // tire-polish bands
+  for(const u of [78,178]){
+    const gr=g.createLinearGradient(u-34,0,u+34,0);
+    gr.addColorStop(0,'rgba(0,0,0,0)'); gr.addColorStop(0.5,'rgba(10,10,14,0.35)'); gr.addColorStop(1,'rgba(0,0,0,0)');
+    g.fillStyle=gr; g.fillRect(u-34,0,68,2048);
+  }
+  // edge lines (solid) + center line (broken), v spans the full 56 m road
+  g.fillStyle='#dfe3e8';
+  g.fillRect(10,0,7,2048); g.fillRect(239,0,7,2048);
+  const pxPerM=2048/56;
+  for(let z=0; z<56; z+=9) g.fillRect(124, z*pxPerM, 8, 3*pxPerM);
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=8;
+  t.wrapS=t.wrapT=THREE.ClampToEdgeWrapping;
+  return t;
+}
+function puddleRoughnessTexture(){
+  const c=document.createElement('canvas'); c.width=128; c.height=512;
+  const g=c.getContext('2d'), rnd=mulberry32(53);
+  g.fillStyle='#b4b4b4'; g.fillRect(0,0,128,512);   // base: fairly rough
+  for(let i=0;i<46;i++){                              // puddles: smooth → mirror
+    const x=rnd()*128, y=rnd()*512, rx=6+rnd()*26, ry=10+rnd()*44;
+    const gr=g.createRadialGradient(x,y,1,x,y,Math.max(rx,ry));
+    gr.addColorStop(0,'rgba(18,18,18,0.95)'); gr.addColorStop(0.75,'rgba(40,40,40,0.9)'); gr.addColorStop(1,'rgba(40,40,40,0)');
+    g.fillStyle=gr;
+    g.save(); g.translate(x,y); g.scale(rx/Math.max(rx,ry),ry/Math.max(rx,ry));
+    g.beginPath(); g.arc(0,0,Math.max(rx,ry),0,7); g.fill(); g.restore();
+  }
+  const t=new THREE.CanvasTexture(c);
+  t.wrapS=t.wrapT=THREE.ClampToEdgeWrapping;
+  return t;
+}
+function skyTexture(night){
+  const c=document.createElement('canvas'); c.width=1024; c.height=512;
+  const g=c.getContext('2d');
+  const grad=g.createLinearGradient(0,0,0,512);
+  if(night){
+    grad.addColorStop(0,'#020409'); grad.addColorStop(0.45,'#0a1030');
+    grad.addColorStop(0.62,'#1c2a55'); grad.addColorStop(0.70,'#8a5a3a');
+    grad.addColorStop(0.74,'#2a2035'); grad.addColorStop(1,'#05070c');
+  } else {
+    grad.addColorStop(0,'#3f7fd0'); grad.addColorStop(0.6,'#9cc6ee');
+    grad.addColorStop(0.72,'#e8d9b8'); grad.addColorStop(1,'#b8c4cc');
+  }
+  g.fillStyle=grad; g.fillRect(0,0,1024,512);
+  const rnd=mulberry32(7);
+  if(night){
+    for(let i=0;i<520;i++){
+      const y=rnd()*320, x=rnd()*1024;
+      g.fillStyle=`rgba(255,255,255,${0.25+rnd()*0.6})`;
+      g.fillRect(x,y,rnd()<0.12?2:1,rnd()<0.12?2:1);
+    }
+    const mg=g.createRadialGradient(512,300,6,512,300,110);
+    mg.addColorStop(0,'rgba(235,242,255,1)'); mg.addColorStop(0.16,'rgba(225,235,255,0.95)');
+    mg.addColorStop(0.22,'rgba(200,215,255,0.35)'); mg.addColorStop(1,'rgba(200,215,255,0)');
+    g.fillStyle=mg; g.beginPath(); g.arc(512,300,110,0,7); g.fill();
+  } else {
+    g.fillStyle='rgba(255,255,255,0.5)';
+    for(let i=0;i<14;i++){ const x=rnd()*1024,y=40+rnd()*180; g.beginPath(); g.ellipse(x,y,40+rnd()*60,12+rnd()*10,0,0,7); g.fill(); }
+  }
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace;
+  return t;
+}
+function streakTexture(){
+  const c=document.createElement('canvas'); c.width=64; c.height=256;
+  const g=c.getContext('2d');
+  const grad=g.createLinearGradient(0,0,0,256);
+  grad.addColorStop(0,'rgba(255,255,255,0.85)'); grad.addColorStop(1,'rgba(255,255,255,0)');
+  g.fillStyle=grad; g.fillRect(0,0,64,256);
+  const img=g.getImageData(0,0,64,256), d=img.data;
+  for(let y=0;y<256;y++) for(let x=0;x<64;x++){
+    const f=Math.sin(Math.PI*x/64);
+    d[(y*64+x)*4+3]*=f;
+  }
+  g.putImageData(img,0,0);
+  return new THREE.CanvasTexture(c);
+}
+function glowTexture(){
+  const c=document.createElement('canvas'); c.width=128; c.height=128;
+  const g=c.getContext('2d');
+  const gr=g.createRadialGradient(64,64,2,64,64,64);
+  gr.addColorStop(0,'rgba(255,255,255,1)'); gr.addColorStop(0.25,'rgba(255,255,255,0.5)');
+  gr.addColorStop(1,'rgba(255,255,255,0)');
+  g.fillStyle=gr; g.fillRect(0,0,128,128);
+  return new THREE.CanvasTexture(c);
+}
+// --- real-Japanese sign faces (mounted on posts / walls only) ---
+function plaqueTexture(){ // tunnel name plaque, mounted ON the portal face
+  const c=document.createElement('canvas'); c.width=1024; c.height=300;
+  const g=c.getContext('2d'), rnd=mulberry32(3);
+  g.fillStyle='#c9ced4'; g.fillRect(0,0,1024,300);
+  for(let i=0;i<900;i++){
+    const v=190+rnd()*40;
+    g.fillStyle=`rgba(${v|0},${v+3|0},${v+8|0},0.4)`;
+    g.fillRect(rnd()*1024,rnd()*300,1+rnd()*3,1+rnd()*3);
+  }
+  g.strokeStyle='#7a7f86'; g.lineWidth=10; g.strokeRect(14,14,996,272);
+  g.textAlign='center'; g.textBaseline='middle';
+  g.font=`900 168px ${CJK_SERIF}`;
+  g.fillStyle='rgba(255,255,255,0.55)'; g.fillText('南稜トンネル',512,158);  // letterpress highlight
+  g.fillStyle='#33383e'; g.fillText('南稜トンネル',512,152);
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=8;
+  return t;
+}
+function heightPlateTexture(){ // 高さ制限 3.7m, mounted on the portal face
+  const c=document.createElement('canvas'); c.width=256; c.height=340;
+  const g=c.getContext('2d');
+  g.fillStyle='#f2c018'; g.fillRect(0,0,256,340);
+  g.fillStyle='#141414';
+  for(let i=-4;i<12;i++){ // hazard border
+    g.save(); g.translate(i*40,0); g.rotate(Math.PI/4);
+    g.fillRect(0,-80,20,560); g.restore();
+  }
+  g.fillStyle='#f5f5f2'; g.fillRect(36,36,184,268);
+  g.fillStyle='#141414'; g.textAlign='center'; g.textBaseline='middle';
+  g.font=`900 44px ${CJK_FONT}`; g.fillText('高さ制限',128,84);
+  g.font=`900 92px ${CJK_FONT}`; g.fillText('3.7m',128,196);
+  g.font=`700 34px ${CJK_FONT}`; g.fillText('ここまで',128,272);
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=8;
+  return t;
+}
+function lightsOnTexture(){ // トンネル内 点灯せよ — post-mounted before the portal
+  const c=document.createElement('canvas'); c.width=512; c.height=340;
+  const g=c.getContext('2d');
+  g.fillStyle='#f4f2ec'; g.fillRect(0,0,512,340);
+  g.strokeStyle='#c02020'; g.lineWidth=18; g.strokeRect(14,14,484,312);
+  g.fillStyle='#181818'; g.textAlign='center'; g.textBaseline='middle';
+  g.font=`900 96px ${CJK_FONT}`; g.fillText('トンネル内',256,108);
+  g.fillStyle='#c02020'; g.font=`900 108px ${CJK_FONT}`; g.fillText('点灯せよ',256,238);
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=8;
+  return t;
+}
+function accidentTexture(){ // 事故多発! 対向車注意 — vertical placard on a post
+  const c=document.createElement('canvas'); c.width=300; c.height=760;
+  const g=c.getContext('2d');
+  g.fillStyle='#f2c018'; g.fillRect(0,0,300,760);
+  g.strokeStyle='#141414'; g.lineWidth=14; g.strokeRect(12,12,276,736);
+  g.fillStyle='#141414'; g.textAlign='center'; g.textBaseline='middle';
+  const chars=[...'事故多発','！','対向車','注意'];
+  let y=92;
+  for(const seg of chars){
+    if(seg==='！'){ g.font=`900 64px ${CJK_FONT}`; g.fillText(seg,150,y); y+=84; continue; }
+    g.font=`900 88px ${CJK_FONT}`;
+    for(const ch of seg){ g.fillText(ch,150,y); y+=96; }
+    y+=18;
+  }
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=8;
+  return t;
+}
+function guideTexture(){ // blue guide sign 南稜トンネル 300m — two posts
+  const c=document.createElement('canvas'); c.width=1024; c.height=420;
+  const g=c.getContext('2d');
+  g.fillStyle='#0d3fa8'; g.fillRect(0,0,1024,420);
+  g.strokeStyle='#eaf1ff'; g.lineWidth=10; g.strokeRect(14,14,996,392);
+  g.fillStyle='#ffffff'; g.textAlign='center'; g.textBaseline='middle';
+  g.font=`900 120px ${CJK_FONT}`; g.fillText('南稜トンネル',430,140);
+  g.font=`900 92px ${CJK_FONT}`; g.fillText('300m',430,300);
+  // arrow
+  g.fillRect(760,150,150,44);
+  g.beginPath(); g.moveTo(910,120); g.lineTo(990,172); g.lineTo(910,224); g.closePath(); g.fill();
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=8;
+  return t;
+}
+function chevronTexture(){ // yellow / black chevron board, no text
+  const c=document.createElement('canvas'); c.width=512; c.height=200;
+  const g=c.getContext('2d');
+  g.fillStyle='#f2c018'; g.fillRect(0,0,512,200);
+  g.strokeStyle='#141414'; g.lineWidth=12; g.strokeRect(8,8,496,184);
+  g.fillStyle='#141414';
+  for(let i=0;i<3;i++){
+    const x=70+i*140;
+    g.beginPath();
+    g.moveTo(x,40); g.lineTo(x+80,100); g.lineTo(x,160); g.lineTo(x+44,160);
+    g.lineTo(x+124,100); g.lineTo(x+44,40); g.closePath(); g.fill();
+  }
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=8;
+  return t;
+}
+function windowLitTexture(seed){ // warm shoji-style window
+  const c=document.createElement('canvas'); c.width=256; c.height=256;
+  const g=c.getContext('2d'), rnd=mulberry32(seed);
+  const gr=g.createLinearGradient(0,0,0,256);
+  gr.addColorStop(0,'#ffd9a0'); gr.addColorStop(0.6,'#f7b96a'); gr.addColorStop(1,'#c07f3a');
+  g.fillStyle=gr; g.fillRect(0,0,256,256);
+  // interior hint: shelf + hanging lamp glow
+  g.fillStyle='rgba(90,50,20,0.55)'; g.fillRect(30,190,196,10);
+  for(let x=44;x<220;x+=26){ g.fillStyle='rgba(80,45,18,0.5)'; g.fillRect(x,150,12,40); }
+  const lg=g.createRadialGradient(128,80,4,128,80,60);
+  lg.addColorStop(0,'rgba(255,244,214,0.95)'); lg.addColorStop(1,'rgba(255,220,160,0)');
+  g.fillStyle=lg; g.beginPath(); g.arc(128,80,60,0,7); g.fill();
+  // wooden lattice
+  g.strokeStyle='#4a2e18'; g.lineWidth=10;
+  for(let i=0;i<=3;i++){ g.beginPath(); g.moveTo(0,i*85.3); g.lineTo(256,i*85.3); g.stroke(); }
+  for(let i=0;i<=4;i++){ g.beginPath(); g.moveTo(i*64,0); g.lineTo(i*64,256); g.stroke(); }
+  g.strokeStyle='#2e1c0e'; g.lineWidth=18; g.strokeRect(0,0,256,256);
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=4;
+  return t;
+}
+function windowDarkTexture(){
+  const c=document.createElement('canvas'); c.width=128; c.height=128;
+  const g=c.getContext('2d');
+  g.fillStyle='#0d1118'; g.fillRect(0,0,128,128);
+  g.strokeStyle='#3a2c1c'; g.lineWidth=8; g.strokeRect(0,0,128,128);
+  g.beginPath(); g.moveTo(64,0); g.lineTo(64,128); g.moveTo(0,64); g.lineTo(128,64); g.stroke();
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace;
+  return t;
+}
+
+// ---------- lights ----------
+const hemi = new THREE.HemisphereLight(0x2a3a5f, 0x10141d, 0.95); scene.add(hemi);
+const moon = new THREE.DirectionalLight(0x8fb0ff, 0.7);
+moon.position.set(-25, 42, 18); moon.castShadow = true;
+moon.shadow.mapSize.set(2048, 2048);
+moon.shadow.camera.left=-75; moon.shadow.camera.right=75;
+moon.shadow.camera.top=75; moon.shadow.camera.bottom=-75;
+moon.shadow.camera.far=260; moon.shadow.bias=-0.0004;
+scene.add(moon); scene.add(moon.target); moon.target.position.set(0,0,-20);
+const sun = new THREE.DirectionalLight(0xfff2dd, 0.0);
+sun.position.set(30, 55, 20); sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left=-75; sun.shadow.camera.right=75;
+sun.shadow.camera.top=75; sun.shadow.camera.bottom=-75;
+sun.shadow.camera.far=260; sun.shadow.bias=-0.0004;
+scene.add(sun); scene.add(sun.target); sun.target.position.set(0,0,-20);
+
+const skyMat = new THREE.MeshBasicMaterial({ map: skyTexture(true), side: THREE.BackSide, fog:false, depthWrite:false });
+const skyDome = new THREE.Mesh(new THREE.SphereGeometry(340, 32, 20), skyMat);
+skyDome.position.set(0, 0, -60); scene.add(skyDome);
+const daySkyTex = skyTexture(false), nightSkyTex = skyMat.map;
+
+// distant mountain silhouettes (layered ridges on the horizon)
+function ridgeSilhouetteTexture(){
+  const c=document.createElement('canvas'); c.width=2048; c.height=220;
+  const g=c.getContext('2d'), rnd=mulberry32(2026);
+  g.clearRect(0,0,2048,220);
+  for(const [base,amp,col] of [[150,70,'#0a1026'],[185,46,'#060a1c']]){
+    g.fillStyle=col; g.beginPath(); g.moveTo(0,220);
+    let y=base;
+    for(let x=0;x<=2048;x+=32){ y=clamp(y+(rnd()-0.5)*amp*0.5, base-amp, base+amp*0.4); g.lineTo(x,y); }
+    g.lineTo(2048,220); g.closePath(); g.fill();
+  }
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace;
+  return t;
+}
+const ridgeMat = new THREE.MeshBasicMaterial({ map: ridgeSilhouetteTexture(), transparent:true, fog:false, depthWrite:false });
+const ridgeMeshes=[];
+for(const [rz, ry, rw] of [[-210, 26, 620],[-260, 34, 780]]){
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(rw, 68), ridgeMat);
+  m.position.set(0, ry, rz); scene.add(m); ridgeMeshes.push(m);
+}
+
+// ---------- terrain ----------
+let roadMat = null;   // wet-asphalt material (envMap applied later)
+function buildTerrain(){
+  const W=150, D=130, SX=112, SZ=98;
+  const geo = new THREE.PlaneGeometry(W, D, SX, SZ);
+  geo.rotateX(-Math.PI/2);
+  const pos = geo.attributes.position;
+  const colors = new Float32Array(pos.count*3);
+  const cForest=new THREE.Color(0x21482f), cForest2=new THREE.Color(0x2a5238),
+        cRock=new THREE.Color(0x6a6058), cRockD=new THREE.Color(0x4c463d),
+        cVerge=new THREE.Color(0x2c4a34), cHigh=new THREE.Color(0x3c4a5e);
+  const col=new THREE.Color();
+  for(let i=0;i<pos.count;i++){
+    const x=pos.getX(i), z=pos.getZ(i)-16;
+    pos.setZ(i, z);
+    const h=terrainH(x,z);
+    pos.setY(i, h);
+    // color by slope / zone
+    const e=0.9;
+    const sx=(terrainH(x+e,z)-terrainH(x-e,z))/(2*e);
+    const sz=(terrainH(x,z+e)-terrainH(x,z-e))/(2*e);
+    const slope=Math.hypot(sx,sz);
+    const zc=clamp(z,-30,26), dd=x-roadX(zc), ad=Math.abs(dd);
+    const n=vnoise(x*0.09+7, z*0.09)*0.5+0.5;
+    // rock mask: steep faces + the portal-cut zone + the low bore mass,
+    // fading to forested slopes higher up and further back (per the ridge mock)
+    let rockM = ss01((slope-0.85)/0.6);
+    if (z>-34&&z<-22&&dd<-6&&dd>-11) rockM = 1;               // portal rock cut
+    const boreZone = (1-ss01((Math.abs(x)-9)/13))             // |x|<9 → 0 by 22
+                   * (1-ss01((z+30)/8))                       // at/behind the portal → 0 by z=-22
+                   * ss01((z+66)/10)                          // fades going deep behind
+                   * (1-ss01((h-22)/12));                     // rock low, forest above ~34 m
+    rockM = Math.max(rockM, boreZone);
+    col.copy(cForest).lerp(cForest2, n);
+    col.lerp(cRock, rockM*0.92);
+    col.lerp(cRockD, rockM*0.4*(1-n));                        // per-face rock variation
+    if (h>30) col.lerp(cHigh, clamp((h-30)/16,0,1)*0.4);      // high crest goes cool, gently
+    if (z>-31&&ad<5.2) col.copy(cVerge).lerp(cForest2, n*0.4); // grass verge by the road
+    const sh=0.86+vnoise(x*0.3,z*0.3)*0.28;
+    colors[i*3]=col.r*sh; colors[i*3+1]=col.g*sh; colors[i*3+2]=col.b*sh;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors,3));
+  geo.computeVertexNormals();
+  const mat=new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.96, metalness:0,
+    flatShading:true });
+  const m=new THREE.Mesh(geo,mat);
+  m.receiveShadow=true;
+  scene.add(m);
+  return m;
+}
+
+// ---------- road ribbons (wet asphalt) ----------
+function buildRoadRibbon(z0, z1, step, width){
+  const pts=[];
+  for(let z=z0; z>=z1; z-=step) pts.push(z);
+  if(pts[pts.length-1]!==z1) pts.push(z1);
+  const n=pts.length;
+  const verts=new Float32Array(n*2*3), uvs=new Float32Array(n*2*2), idx=[];
+  const len=Math.abs(z1-z0);
+  for(let i=0;i<n;i++){
+    const z=pts[i], xc=roadX(z), y=roadY(z)+0.03;
+    const yaw=roadYaw(z);
+    const px=Math.cos(yaw), pz=-Math.sin(yaw); // perpendicular in XZ
+    verts.set([xc-px*width/2, y, z-pz*width/2], i*6);
+    verts.set([xc+px*width/2, y, z+pz*width/2], i*6+3);
+    const v=(z0-z)/len;
+    uvs.set([0,v], i*4); uvs.set([1,v], i*4+2);
+    if(i<n-1){ const a=i*2; idx.push(a,a+1,a+2, a+1,a+3,a+2); }
+  }
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(verts,3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uvs,2));
+  geo.setIndex(idx); geo.computeVertexNormals();
+  return geo;
+}
+function buildRoads(){
+  const tex=asphaltTexture();
+  const rough=puddleRoughnessTexture();
+  roadMat=new THREE.MeshStandardMaterial({
+    map:tex, roughnessMap:rough, roughness:1.0, metalness:0.04,
+    color:0xbfc3cc,   // damp darkening multiplier
+  });
+  const outer=new THREE.Mesh(buildRoadRibbon(26,-30,1,6.6), roadMat);
+  outer.receiveShadow=true; scene.add(outer);
+  const innerTex=asphaltTexture();
+  const innerMat=roadMat.clone(); innerMat.map=innerTex; innerMat.roughnessMap=rough;
+  const inner=new THREE.Mesh(buildRoadRibbon(-30,-58,2,9.2), innerMat);
+  inner.receiveShadow=true; scene.add(inner);
+  roadMat.userData.inner=innerMat;
+  return {outer, inner};
+}
+
+// ---------- tunnel portal: stone face + arch mouth bored into the mountain ----------
+function buildPortal(){
+  const g=new THREE.Group();
+  const RY=roadY(-30); // 1.8
+  // face: outer rect with an arched hole (extruded 1.2 m back into the hill)
+  const shape=new THREE.Shape();
+  shape.moveTo(-8.5,-2.6); shape.lineTo(8.5,-2.6); shape.lineTo(8.5,10.2); shape.lineTo(-8.5,10.2); shape.closePath();
+  const hole=new THREE.Path();
+  const spring=3.4, ar=4.2;
+  hole.moveTo(-ar,-2.6); hole.lineTo(-ar,spring);
+  hole.absarc(0,spring,ar,Math.PI,0,true);
+  hole.lineTo(ar,-2.6); hole.closePath();
+  shape.holes.push(hole);
+  const faceGeo=new THREE.ExtrudeGeometry(shape,{depth:1.2,bevelEnabled:false});
+  const faceMat=new THREE.MeshStandardMaterial({ map:stoneTexture(), roughness:0.9, metalness:0.02 });
+  const fuv=faceGeo.attributes.uv;
+  for(let i=0;i<fuv.count;i++) fuv.setXY(i, fuv.getX(i)*0.12, fuv.getY(i)*0.12);
+  const face=new THREE.Mesh(faceGeo,faceMat);
+  face.position.set(0,RY,-31.2);   // front plane at z=-30
+  face.castShadow=true; face.receiveShadow=true;
+  g.add(face);
+  // wing walls: tall retaining wall on the rock-cut side, low shoulder on the right
+  const wingL=new THREE.Mesh(new THREE.BoxGeometry(3.4,7.2,1.0), faceMat);
+  wingL.position.set(-9.9, RY+1.2, -29.6); wingL.rotation.y=0.42;
+  wingL.castShadow=true; wingL.receiveShadow=true; g.add(wingL);
+  const wingR=new THREE.Mesh(new THREE.BoxGeometry(3.0,4.0,1.0), faceMat);
+  wingR.position.set(9.7, RY-0.2, -29.6); wingR.rotation.y=-0.42;
+  wingR.castShadow=true; wingR.receiveShadow=true; g.add(wingR);
+  // name plaque mounted ON the face (physically attached, 6 cm proud)
+  const plaque=new THREE.Mesh(new THREE.BoxGeometry(3.9,1.15,0.12),
+    new THREE.MeshStandardMaterial({ map:plaqueTexture(), roughness:0.55 }));
+  plaque.position.set(0,RY+8.6,-29.9); plaque.castShadow=true;
+  g.add(plaque);
+  // height-limit plate on the face, left of the arch
+  const hpTex=heightPlateTexture();
+  const hp=new THREE.Mesh(new THREE.PlaneGeometry(0.95,1.26),
+    new THREE.MeshStandardMaterial({ map:hpTex, roughness:0.5,
+      emissive:0xffffff, emissiveMap:hpTex, emissiveIntensity:0.25 }));
+  hp.position.set(-6.1,RY+4.0,-29.93); hp.rotation.y=0.06;
+  g.add(hp);
+  // warm interior glow card just inside the mouth (the lit-bore read from the mock).
+  // Kept deliberately under the bloom threshold so it reads warm orange, never white.
+  const mgc=document.createElement('canvas'); mgc.width=256; mgc.height=256;
+  const mg=mgc.getContext('2d');
+  const mgrad=mg.createRadialGradient(128,175,10,128,175,150);
+  mgrad.addColorStop(0,'rgba(255,148,66,0.9)'); mgrad.addColorStop(0.5,'rgba(255,120,52,0.42)');
+  mgrad.addColorStop(1,'rgba(255,110,45,0)');
+  mg.fillStyle=mgrad; mg.fillRect(0,0,256,256);
+  const mgTex=new THREE.CanvasTexture(mgc); mgTex.colorSpace=THREE.SRGBColorSpace;
+  const mouthCard=new THREE.Mesh(new THREE.PlaneGeometry(8.2,7.4),
+    new THREE.MeshBasicMaterial({ map:mgTex, transparent:true, opacity:0.5,
+      blending:THREE.AdditiveBlending, depthWrite:false }));
+  mouthCard.position.set(0,RY+3.1,-30.6); g.add(mouthCard);
+  const mouthGlow=new THREE.PointLight(0xff9a3e, 9, 18, 1.8);
+  mouthGlow.position.set(0,RY+3.5,-32); g.add(mouthGlow);
+  // drainage channel lip at the mouth
+  const lip=new THREE.Mesh(new THREE.BoxGeometry(9.0,0.18,0.7),
+    new THREE.MeshStandardMaterial({color:0x4a4d52,roughness:0.9}));
+  lip.position.set(0,RY+0.02,-29.7); lip.receiveShadow=true;
+  g.add(lip);
+  scene.add(g);
+  return g;
+}
+
+// ---------- tunnel tube: dark bore with pooled amber light, far-exit glow ----------
+function buildTube(){
+  const g=new THREE.Group();
+  const RY=1.8, spring=2.6, ar=4.7, z0=-30, z1=-58;
+  // sweep the arch profile along -z
+  const prof=[];
+  const NW=4;
+  for(let i=0;i<=NW;i++) prof.push([-ar, RY + (spring/NW)*i]);            // left wall
+  const NA=14;
+  for(let i=1;i<NA;i++){ const a=Math.PI - Math.PI*i/NA;
+    prof.push([ar*Math.cos(a), RY+spring+ar*Math.sin(a)]); }               // arch
+  for(let i=NW;i>=0;i--) prof.push([ar, RY + (spring/NW)*i]);             // right wall
+  const P=prof.length, SEG=14;
+  const verts=new Float32Array((SEG+1)*P*3), idx=[];
+  for(let s=0;s<=SEG;s++){
+    const z=z0+(z1-z0)*s/SEG;
+    for(let i=0;i<P;i++) verts.set([prof[i][0],prof[i][1],z], (s*P+i)*3);
+  }
+  for(let s=0;s<SEG;s++) for(let i=0;i<P-1;i++){
+    const a=s*P+i, b=a+P;
+    idx.push(a,b,a+1, b,b+1,a+1);
+  }
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(verts,3));
+  geo.setIndex(idx); geo.computeVertexNormals();
+  const wallMat=new THREE.MeshStandardMaterial({ color:0x33363c, roughness:0.92,
+    metalness:0.03, side:THREE.DoubleSide });
+  const tube=new THREE.Mesh(geo,wallMat);
+  tube.receiveShadow=true;
+  g.add(tube);
+  // ceiling light fixtures: receding warm string, dim + pooled (never daylight-bright)
+  const fixMat=new THREE.MeshStandardMaterial({ color:0x2a2018,
+    emissive:0xffb45e, emissiveIntensity:1.8 });
+  for(const z of [-34,-40,-46,-52]){
+    const f=new THREE.Mesh(new THREE.BoxGeometry(0.62,0.14,0.3), fixMat);
+    f.position.set(0,RY+spring+ar-0.35,z); g.add(f);
+  }
+  const l1=new THREE.PointLight(0xffa63d, 11, 26, 1.8); l1.position.set(0,7.6,-38); g.add(l1);
+  const l2=new THREE.PointLight(0xffa63d, 8, 24, 1.8); l2.position.set(0,7.6,-50); g.add(l2);
+  // wall delineators: small reflective studs receding into the dark
+  const studGeo=new THREE.BoxGeometry(0.09,0.09,0.05);
+  const studMat=new THREE.MeshStandardMaterial({ color:0x111111, emissive:0xfff2cc, emissiveIntensity:1.6 });
+  const studs=new THREE.InstancedMesh(studGeo, studMat, 28);
+  const M=new THREE.Matrix4(); let si=0;
+  for(let k=0;k<14;k++){
+    const z=-33-k*1.9;
+    M.makeTranslation(-4.45,RY+1.1,z); studs.setMatrixAt(si++,M);
+    M.makeTranslation( 4.45,RY+1.1,z); studs.setMatrixAt(si++,M);
+  }
+  g.add(studs);
+  // red emergency-light box on the right wall
+  const em=new THREE.Mesh(new THREE.BoxGeometry(0.34,0.5,0.18),
+    new THREE.MeshStandardMaterial({ color:0x881111, emissive:0xff2222, emissiveIntensity:2.6 }));
+  em.position.set(4.42,RY+1.6,-36); g.add(em);
+  // far cap: darkness with a faint cool glow = the bore continues through
+  const cap=new THREE.Mesh(new THREE.PlaneGeometry(10.5,9.6),
+    new THREE.MeshBasicMaterial({ color:0x040507 }));
+  cap.position.set(0,RY+4.2,-57.9); g.add(cap);
+  const farGlow=new THREE.Mesh(new THREE.CircleGeometry(1.15,20),
+    new THREE.MeshBasicMaterial({ color:0xbdd2ee, transparent:true, opacity:0.5,
+      blending:THREE.AdditiveBlending, depthWrite:false }));
+  farGlow.position.set(0,RY+2.4,-57.8); g.add(farGlow);
+  scene.add(g);
+  return g;
+}
+
+// ---------- shared prop materials ----------
+const steelMat=new THREE.MeshStandardMaterial({ color:0xb9bec6, roughness:0.45, metalness:0.75 });
+const darkSteelMat=new THREE.MeshStandardMaterial({ color:0x232529, roughness:0.6, metalness:0.55 });
+const concreteMat=new THREE.MeshStandardMaterial({ color:0x8a8d92, roughness:0.9 });
+const poleMat=new THREE.MeshStandardMaterial({ color:0x6f6e68, roughness:0.85 });
+const wireMat=new THREE.MeshBasicMaterial({ color:0x050507 });
+
+function catenary(a,b,sag,radius=0.025){
+  const mid=new THREE.Vector3().addVectors(a,b).multiplyScalar(0.5); mid.y-=sag;
+  const curve=new THREE.QuadraticBezierCurve3(a,mid,b);
+  const mesh=new THREE.Mesh(new THREE.TubeGeometry(curve,20,radius,6), wireMat);
+  scene.add(mesh); return mesh;
+}
+const V=(x,y,z)=>new THREE.Vector3(x,y,z);
+
+// ---------- guardrails following the road curve ----------
+function buildGuardrails(){
+  const g=new THREE.Group();
+  const postGeo=new THREE.BoxGeometry(0.14,1.2,0.14);
+  const railGeo=new THREE.BoxGeometry(0.07,0.32,3.06);
+  for(const s of [-1,1]){
+    for(let z=24; z>-28; z-=3){
+      const xc=roadX(z), y=roadY(z), yaw=roadYaw(z);
+      const px=Math.cos(yaw), pz=-Math.sin(yaw);
+      const rx=xc+px*s*3.95, rz=z+pz*s*3.95;
+      const post=new THREE.Mesh(postGeo,darkSteelMat);
+      post.position.set(rx,y+0.3,rz); post.rotation.y=yaw; post.castShadow=true; g.add(post);
+      const rail=new THREE.Mesh(railGeo,steelMat);
+      rail.position.set(rx,y+0.62,rz-1.5*Math.cos(yaw));
+      rail.rotation.y=yaw; rail.castShadow=true; g.add(rail);
+    }
+  }
+  scene.add(g);
+}
+
+// ---------- street lamps: curved arm over the road, sodium head ----------
+const lampLights=[];
+function buildLamp(x,z,armDir){
+  const g=new THREE.Group();
+  const y=roadY(z);
+  const pole=new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.13,7.4,10),darkSteelMat);
+  pole.position.set(0,3.7,0); pole.castShadow=true; g.add(pole);
+  const armCurve=new THREE.QuadraticBezierCurve3(V(0,7.25,0),V(armDir*1.1,7.45,0),V(armDir*2.3,7.05,0));
+  const arm=new THREE.Mesh(new THREE.TubeGeometry(armCurve,12,0.07,8),darkSteelMat);
+  arm.castShadow=true; g.add(arm);
+  const head=new THREE.Mesh(new THREE.BoxGeometry(0.9,0.16,0.34),
+    new THREE.MeshStandardMaterial({ color:0x1c1c1e, emissive:0xffb45e, emissiveIntensity:3.2 }));
+  head.position.set(armDir*2.3,6.98,0); g.add(head);
+  const glow=new THREE.Sprite(new THREE.SpriteMaterial({ map:glowTex, color:0xffb45e,
+    transparent:true, opacity:0.75, blending:THREE.AdditiveBlending, depthWrite:false }));
+  glow.scale.set(2.6,2.6,1); glow.position.set(armDir*2.3,6.95,0); g.add(glow);
+  const p=new THREE.PointLight(0xffa63d, 26, 30, 1.7);
+  p.position.set(armDir*2.3,6.6,0); g.add(p); lampLights.push(p);
+  g.position.set(x,y-0.3,z);
+  g.userData.headX = x+armDir*2.3; g.userData.headZ = z;
+  scene.add(g);
+  return g;
+}
+
+// ---------- utility poles + catenary wires from real crossarm points ----------
+function buildPoles(){
+  const spots=[[16],[-2],[-20]];
+  const tops=[];
+  for(const [z] of spots){
+    const x=roadX(z)-7.2, y=roadY(z);
+    const pole=new THREE.Mesh(new THREE.CylinderGeometry(0.11,0.15,8.8,10),poleMat);
+    pole.position.set(x,y+4.1,z); pole.castShadow=true; scene.add(pole);
+    const cross=new THREE.Mesh(new THREE.BoxGeometry(2.0,0.12,0.12),poleMat);
+    cross.position.set(x,y+7.8,z); cross.castShadow=true; scene.add(cross);
+    tops.push([x,y+7.8,z]);
+  }
+  for(let i=0;i<tops.length-1;i++)
+    for(const dx of [-0.9,0.9])
+      catenary(V(tops[i][0]+dx,tops[i][1],tops[i][2]),V(tops[i+1][0]+dx,tops[i+1][1],tops[i+1][2]),1.15);
+  // one crossing span over the road, pole-top to lamp-top
+  catenary(V(tops[1][0],tops[1][1],tops[1][2]),V(roadX(-8)+4.9,roadY(-8)+7.3,-8),1.5);
+}
+
+// ---------- post-mounted signs (nothing floats) ----------
+function postSign(tex,w,h,x,z,rotY,postH=3.2,emissive=0.55){
+  const g=new THREE.Group();
+  const faceMat=new THREE.MeshStandardMaterial({ map:tex, roughness:0.45,
+    emissive:0xffffff, emissiveMap:tex, emissiveIntensity:emissive });
+  const board=new THREE.Mesh(new THREE.BoxGeometry(w,h,0.09),
+    [darkSteelMat,darkSteelMat,darkSteelMat,darkSteelMat,faceMat,darkSteelMat]);
+  // box material order: +x,-x,+y,-y,+z,-z → face on +z; rotate group to face drivers
+  board.position.set(0,postH+h/2-0.4,0); board.castShadow=true; g.add(board);
+  for(const dx of [-w/2+0.25, w/2-0.25]){
+    const post=new THREE.Mesh(new THREE.CylinderGeometry(0.06,0.06,postH,8),darkSteelMat);
+    post.position.set(dx,postH/2,0); post.castShadow=true; g.add(post);
+  }
+  g.position.set(x,roadY(z)-0.3,z); g.rotation.y=rotY;
+  scene.add(g); return g;
+}
+function buildSigns(){
+  // blue guide sign, left side, faces drivers approaching the portal
+  postSign(guideTexture(),3.4,1.4, roadX(-18)-5.4,-18, 0, 3.6);
+  // トンネル内 点灯せよ, right side before the portal
+  postSign(lightsOnTexture(),1.7,1.12, roadX(-23)+5.0,-23, 0, 3.0, 0.4);
+  // 事故多発! 対向車注意 vertical placard, left side near the portal
+  postSign(accidentTexture(),0.85,2.15, roadX(-26.5)-4.6,-26.5, 0, 2.9, 0.4);
+  // chevron array on the outside of the bend (right side), decreasing toward the curve
+  const chevTex=chevronTexture();
+  let k=0;
+  for(const z of [3,-2.5,-8]){
+    const w=1.9-k*0.25;
+    const g=new THREE.Group();
+    const faceMat=new THREE.MeshStandardMaterial({ map:chevTex, roughness:0.45,
+      emissive:0xffffff, emissiveMap:chevTex, emissiveIntensity:0.5 });
+    const board=new THREE.Mesh(new THREE.BoxGeometry(w,0.74,0.08),
+      [darkSteelMat,darkSteelMat,darkSteelMat,darkSteelMat,faceMat,darkSteelMat]);
+    board.position.set(0,1.55,0); board.castShadow=true; g.add(board);
+    const post=new THREE.Mesh(new THREE.CylinderGeometry(0.06,0.06,1.9,8),darkSteelMat);
+    post.position.set(0,0.95,0); post.castShadow=true; g.add(post);
+    const x=roadX(z)+5.3, y=roadY(z);
+    g.position.set(x,y-0.3,z); g.rotation.y=roadYaw(z)*0.5;
+    scene.add(g); k++;
+  }
+}
+
+// ---------- houses: real shapes, varied roof forms, warm windows ----------
+function roofGeo(tris,mat){
+  const v=new Float32Array(tris.length*3);
+  tris.forEach((p,i)=>v.set(p,i*3));
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position',new THREE.BufferAttribute(v,3));
+  geo.computeVertexNormals();
+  const m=new THREE.Mesh(geo,mat);
+  m.castShadow=true; m.receiveShadow=true;
+  return m;
+}
+function makeHipRoof(w,d,h,ov,mat){
+  const hw=w/2+ov, hd=d/2+ov;
+  const rl=Math.max(0.4,(w-d)/2);
+  const A=[-hw,0,-hd],B=[hw,0,-hd],C=[hw,0,hd],D=[-hw,0,hd],R1=[-rl,h,0],R2=[rl,h,0];
+  // cleaner explicit faces:
+  const f=[A,B,R2, A,R2,R1,   // north slope (trapezoid)
+           D,R1,R2, D,R2,C,   // south slope
+           B,C,R2,            // east triangle
+           D,A,R1];           // west triangle
+  return roofGeo(f,mat);
+}
+function gableRoofMesh(w,d,h,ov,mat){
+  const hw=w/2+ov, hd=d/2+ov;
+  const A=[-hw,0,-hd],B=[hw,0,-hd],C=[hw,0,hd],D=[-hw,0,hd],R1=[-hw,h,0],R2=[hw,h,0];
+  const f=[A,R1,B, B,R1,R2,      // north slope
+           R2,R1,C, C,R1,D,      // south slope
+           B,C,R2,               // east gable
+           D,A,R1];              // west gable
+  return roofGeo(f,mat);
+}
+const roofMatA=new THREE.MeshStandardMaterial({ color:0x2c3542, roughness:0.85, flatShading:true });
+const roofMatB=new THREE.MeshStandardMaterial({ color:0x4a3a2c, roughness:0.9, flatShading:true });
+const wallMatA=new THREE.MeshStandardMaterial({ color:0xd8cfc0, roughness:0.85 });
+const wallMatB=new THREE.MeshStandardMaterial({ color:0x8a6f52, roughness:0.85 });
+const foundMat=new THREE.MeshStandardMaterial({ color:0x6a6d72, roughness:0.95 });
+const winLitMats=[windowLitTexture(11),windowLitTexture(23),windowLitTexture(37)].map(t=>
+  new THREE.MeshStandardMaterial({ map:t, emissive:0xffffff, emissiveMap:t, emissiveIntensity:1.8, roughness:0.4 }));
+const winDarkMat=new THREE.MeshStandardMaterial({ map:windowDarkTexture(), roughness:0.3, metalness:0.2 });
+
+function buildHouse(x,z,rotY,kind,seed){
+  const rnd=mulberry32(seed);
+  const g=new THREE.Group();
+  const w=5.2+rnd()*1.8, d=4.2+rnd()*1.2, bh=2.9+rnd()*0.8;
+  const gy=terrainH(x,z);
+  const floorY=gy+0.85;
+  // stone foundation, sunk into the slope
+  const found=new THREE.Mesh(new THREE.BoxGeometry(w+0.7,2.0,d+0.7),foundMat);
+  found.position.set(0,floorY-1.0,0); found.castShadow=true; found.receiveShadow=true; g.add(found);
+  // body
+  const wallMat=rnd()<0.5?wallMatA:wallMatB;
+  const body=new THREE.Mesh(new THREE.BoxGeometry(w,bh,d),wallMat);
+  body.position.set(0,floorY+bh/2,0); body.castShadow=true; body.receiveShadow=true; g.add(body);
+  // roof: 0 gable, 1 hip, 2 gable with dormer
+  const rh=1.7+rnd()*0.7, ov=0.65;
+  const rmat=rnd()<0.6?roofMatA:roofMatB;
+  if(kind===1){ const r=makeHipRoof(w,d,rh,ov,rmat); r.position.set(0,floorY+bh,0); g.add(r); }
+  else { const r=gableRoofMesh(w,d,rh,ov,rmat); r.position.set(0,floorY+bh,0); g.add(r); }
+  // ridge cap
+  const ridge=new THREE.Mesh(new THREE.BoxGeometry(w+ov*1.6,0.14,0.3),rmat);
+  ridge.position.set(0,floorY+bh+rh+0.02,0); g.add(ridge);
+  // windows: front face (+z local), some lit
+  const nWin=2+Math.floor(rnd()*2);
+  for(let i=0;i<nWin;i++){
+    const wx=-w/2+ (i+0.5)*(w/nWin);
+    const lit=rnd()<0.85;
+    const win=new THREE.Mesh(new THREE.PlaneGeometry(0.95,1.05),
+      lit?winLitMats[Math.floor(rnd()*3)]:winDarkMat);
+    win.position.set(wx,floorY+1.55,d/2+0.02); g.add(win);
+  }
+  // side window
+  const sw=new THREE.Mesh(new THREE.PlaneGeometry(0.95,1.05), rnd()<0.8?winLitMats[0]:winDarkMat);
+  sw.position.set(w/2+0.02,floorY+1.55,0); sw.rotation.y=Math.PI/2; g.add(sw);
+  // entrance: recessed dark door + canopy on wall brackets (attached)
+  const door=new THREE.Mesh(new THREE.PlaneGeometry(0.95,1.9),
+    new THREE.MeshStandardMaterial({ color:0x1a1410, roughness:0.9 }));
+  door.position.set(w/2-1.2,floorY+0.98,d/2+0.02); g.add(door);
+  // porch light: warm emissive quad mounted ON the wall above the door (attached)
+  const porch=new THREE.Mesh(new THREE.PlaneGeometry(0.3,0.2),
+    new THREE.MeshStandardMaterial({ color:0x201409, emissive:0xffc37a, emissiveIntensity:2.6 }));
+  porch.position.set(w/2-1.2,floorY+2.12,d/2+0.03); g.add(porch);
+  const canopy=new THREE.Mesh(new THREE.BoxGeometry(1.7,0.08,0.9),rmat);
+  canopy.position.set(w/2-1.2,floorY+2.35,d/2+0.42); canopy.rotation.x=0.22; canopy.castShadow=true; g.add(canopy);
+  for(const dx of [-0.7,0.7]){
+    const brk=new THREE.Mesh(new THREE.BoxGeometry(0.07,0.5,0.07),darkSteelMat);
+    brk.position.set(w/2-1.2+dx,floorY+2.1,d/2+0.72); g.add(brk);
+  }
+  g.position.set(x,0,z); g.rotation.y=rotY;
+  scene.add(g);
+  return {group:g, winY:floorY+1.55, x, z, rotY};
+}
+
+// ---------- trees: instanced pines + a few cherry ----------
+const pineTrunkMat=new THREE.MeshStandardMaterial({ color:0x3a2c22, roughness:1 });
+const pineMat=new THREE.MeshStandardMaterial({ color:0x1e4030, roughness:1, flatShading:true });
+const cherryTrunkMat=new THREE.MeshStandardMaterial({ color:0x2e2622, roughness:1 });
+const cherryMat=new THREE.MeshStandardMaterial({ color:0x8a5f74, roughness:1, flatShading:true });
+function buildTrees(){
+  const rnd=mulberry32(777);
+  const spots=[];
+  let guard=0;
+  while(spots.length<118 && guard++<3000){
+    const x=(rnd()*2-1)*72, z=26-rnd()*92;
+    const zc=clamp(z,-30,26), ad=Math.abs(x-roadX(zc));
+    if(ad<7.6) continue;
+    if(z<=-30&&z>=-64&&Math.abs(x)<15) continue;   // keep the bore mass clean
+    const h=terrainH(x,z);
+    if(h>34) continue;
+    let clash=false;
+    for(const hx of houseSpots){ const dx=x-hx[0],dz=z-hx[1]; if(dx*dx+dz*dz<49){clash=true;break;} }
+    if(clash) continue;
+    spots.push([x,h,z,0.75+rnd()*0.9]);
+  }
+  const trunkG=new THREE.CylinderGeometry(0.14,0.22,1.6,7);
+  const coneG=new THREE.ConeGeometry(1.5,2.6,8);
+  const n=spots.length;
+  const trunks=new THREE.InstancedMesh(trunkG,pineTrunkMat,n);
+  const c1=new THREE.InstancedMesh(coneG,pineMat,n);
+  const c2=new THREE.InstancedMesh(coneG,pineMat,n);
+  const c3=new THREE.InstancedMesh(coneG,pineMat,n);
+  const M=new THREE.Matrix4(), Q=new THREE.Quaternion(), S=new THREE.Vector3(), Pv=new THREE.Vector3();
+  const up=new THREE.Vector3(0,1,0);
+  spots.forEach(([x,h,z,s],i)=>{
+    Q.setFromAxisAngle(up, rnd()*6.28);
+    Pv.set(x,h-0.25,z); S.set(s,s,s); M.compose(Pv,Q,S); trunks.setMatrixAt(i,M);
+    Pv.set(x,h+1.15*s,z); M.compose(Pv,Q,S); c1.setMatrixAt(i,M);
+    Pv.set(x,h+2.35*s,z); S.set(s*0.72,s*0.72,s*0.72); M.compose(Pv,Q,S); c2.setMatrixAt(i,M);
+    Pv.set(x,h+3.3*s,z); S.set(s*0.45,s*0.5,s*0.45); M.compose(Pv,Q,S); c3.setMatrixAt(i,M);
+  });
+  for(const m of [trunks,c1,c2,c3]){ m.castShadow=true; scene.add(m); }
+  // cherry trees near the road: dark trunks + pale blossom canopy
+  const chSpots=[[roadX(14)+7.5,14],[roadX(-6)-7.8,-6],[roadX(-14)+8.2,-14],[roadX(6)-8.4,6]];
+  const blobG=new THREE.IcosahedronGeometry(1.15,1);
+  const blobs=new THREE.InstancedMesh(blobG,cherryMat,chSpots.length*3);
+  const ctrunks=new THREE.InstancedMesh(new THREE.CylinderGeometry(0.16,0.24,2.4,7),cherryTrunkMat,chSpots.length);
+  let bi=0;
+  chSpots.forEach(([x,z],i)=>{
+    const h=terrainH(x,z);
+    Pv.set(x,h+1.0,z); S.set(1,1,1); Q.identity(); M.compose(Pv,Q,S); ctrunks.setMatrixAt(i,M);
+    for(let k=0;k<3;k++){
+      Pv.set(x+(rnd()-0.5)*1.6, h+2.6+rnd()*1.1, z+(rnd()-0.5)*1.6);
+      const bs=0.8+rnd()*0.5; S.set(bs,bs*0.8,bs); M.compose(Pv,Q,S);
+      blobs.setMatrixAt(bi++,M);
+    }
+  });
+  ctrunks.castShadow=true; blobs.castShadow=true;
+  scene.add(ctrunks); scene.add(blobs);
+}
+
+// ---------- rocks by the portal cut ----------
+function buildRocks(){
+  const rnd=mulberry32(31);
+  const rockMat=new THREE.MeshStandardMaterial({ color:0x5e5e64, roughness:0.95, flatShading:true });
+  const rockGeo=new THREE.IcosahedronGeometry(1,0);
+  for(const [x,z,s] of [[-10.5,-25,1.6],[11,-26.5,2.1],[-12,-20,1.1],[9.5,-33,1.4],[-9,-34.5,1.2],[13,-19,0.9]]){
+    const r=new THREE.Mesh(rockGeo,rockMat);
+    r.position.set(x,terrainH(x,z)+s*0.25,z);
+    r.scale.set(s,s*(0.7+rnd()*0.4),s*(0.8+rnd()*0.4));
+    r.rotation.set(rnd()*3,rnd()*3,rnd()*3);
+    r.castShadow=true; r.receiveShadow=true; scene.add(r);
+  }
+}
+
+// ---------- sedan heading into the tunnel ----------
+let headlightSpot=null;
+function buildSedan(){
+  const g=new THREE.Group();
+  const bodyMat=new THREE.MeshStandardMaterial({ color:0x2a3242, roughness:0.35, metalness:0.6 });
+  const glassMat=new THREE.MeshStandardMaterial({ color:0x0c1016, roughness:0.15, metalness:0.4 });
+  const body=new THREE.Mesh(new THREE.BoxGeometry(1.82,0.62,4.4),bodyMat);
+  body.position.y=0.62; body.castShadow=true; g.add(body);
+  const cabin=new THREE.Mesh(new THREE.BoxGeometry(1.6,0.52,2.2),glassMat);
+  cabin.position.set(0,1.16,-0.25); cabin.castShadow=true; g.add(cabin);
+  const wheelG=new THREE.CylinderGeometry(0.34,0.34,0.24,14);
+  wheelG.rotateZ(Math.PI/2);
+  const wheelM=new THREE.MeshStandardMaterial({ color:0x0a0a0c, roughness:0.9 });
+  for(const [wx,wz] of [[-0.82,1.45],[0.82,1.45],[-0.82,-1.45],[0.82,-1.45]]){
+    const w=new THREE.Mesh(wheelG,wheelM);
+    w.position.set(wx,0.34,wz); g.add(w);
+  }
+  // headlights (front faces -z): emissive discs + glow sprites
+  const hlMat=new THREE.MeshStandardMaterial({ color:0x444444, emissive:0xfff4d8, emissiveIntensity:4.5 });
+  for(const sx of [-0.6,0.6]){
+    const hl=new THREE.Mesh(new THREE.CircleGeometry(0.14,14),hlMat);
+    hl.position.set(sx,0.66,-2.21); hl.rotation.y=Math.PI; g.add(hl);
+    const spr=new THREE.Sprite(new THREE.SpriteMaterial({ map:glowTex, color:0xfff2cc,
+      transparent:true, opacity:0.85, blending:THREE.AdditiveBlending, depthWrite:false }));
+    spr.scale.set(0.9,0.9,1); spr.position.set(sx,0.66,-2.3); g.add(spr);
+  }
+  // taillight bar
+  const tl=new THREE.Mesh(new THREE.BoxGeometry(1.5,0.12,0.06),
+    new THREE.MeshStandardMaterial({ color:0x330000, emissive:0xff2a2a, emissiveIntensity:3.2 }));
+  tl.position.set(0,0.78,2.21); g.add(tl);
+  const z=-13, xc=roadX(z);
+  g.position.set(xc,roadY(z)+0.02,z);
+  g.rotation.y=roadYaw(z);   // front is natively -z (toward the tunnel)
+  scene.add(g);
+  headlightSpot=new THREE.SpotLight(0xfff2d8, 320, 46, 0.52, 0.55, 1.3);
+  headlightSpot.position.set(xc,roadY(z)+0.9,z-1.5);
+  headlightSpot.target.position.set(roadX(z-18),roadY(z-18),z-18);
+  scene.add(headlightSpot); scene.add(headlightSpot.target);
+  return g;
+}
+const glowTex=glowTexture(), streakTex=streakTexture();
+const houseSpots=[[-20,6],[ -26,-8],[22,-2],[27,-18],[-17,-20],[34,8]];
+
+// ---------- custom bloom (UnrealBloom-style, no addons) + ACES composite ----------
+// scene -> rtScene (HDR, MSAA) -> bright@1/4 -> blurH -> blurV -> composite(ACES+sRGB) -> canvas
+let rtScene=null, rtBright=null, rtBlur=null;
+const postCam=new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+const postScene=new THREE.Scene();
+const postQuad=new THREE.Mesh(new THREE.PlaneGeometry(2,2),null);
+postQuad.frustumCulled=false; postScene.add(postQuad);
+const POST_VERT=`varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.0,1.0); }`;
+const brightMat=new THREE.ShaderMaterial({
+  uniforms:{ tSrc:{value:null}, uThreshold:{value:0.92} },
+  vertexShader:POST_VERT,
+  fragmentShader:`uniform sampler2D tSrc; uniform float uThreshold; varying vec2 vUv;
+    void main(){
+      vec3 c=texture2D(tSrc,vUv).rgb;
+      float l=dot(c,vec3(0.2126,0.7152,0.0722));
+      float w=smoothstep(uThreshold,uThreshold+0.55,l);
+      gl_FragColor=vec4(c*w,1.0);
+    }`,
+  depthTest:false, depthWrite:false,
+});
+const blurMat=new THREE.ShaderMaterial({
+  uniforms:{ tSrc:{value:null}, uDir:{value:new THREE.Vector2(1,0)}, uRes:{value:new THREE.Vector2(320,200)} },
+  vertexShader:POST_VERT,
+  fragmentShader:`uniform sampler2D tSrc; uniform vec2 uDir; uniform vec2 uRes; varying vec2 vUv;
+    void main(){
+      vec2 px=uDir/uRes;
+      vec3 c=texture2D(tSrc,vUv).rgb*0.227027;
+      c+=texture2D(tSrc,vUv+px*1.3846).rgb*0.316216;
+      c+=texture2D(tSrc,vUv-px*1.3846).rgb*0.316216;
+      c+=texture2D(tSrc,vUv+px*3.2308).rgb*0.070270;
+      c+=texture2D(tSrc,vUv-px*3.2308).rgb*0.070270;
+      gl_FragColor=vec4(c,1.0);
+    }`,
+  depthTest:false, depthWrite:false,
+});
+const compMat=new THREE.ShaderMaterial({
+  uniforms:{ tScene:{value:null}, tBloom:{value:null}, uStrength:{value:0.45}, uExposure:{value:1.32} },
+  vertexShader:POST_VERT,
+  fragmentShader:`uniform sampler2D tScene; uniform sampler2D tBloom;
+    uniform float uStrength; uniform float uExposure; varying vec2 vUv;
+    vec3 aces(vec3 x){
+      const float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14;
+      return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0);
+    }
+    vec3 toSRGB(vec3 x){
+      return mix(x*12.92,1.055*pow(max(x,vec3(0.0)),vec3(1.0/2.4))-0.055,step(0.0031308,x));
+    }
+    void main(){
+      vec3 col=texture2D(tScene,vUv).rgb+texture2D(tBloom,vUv).rgb*uStrength;
+      col=aces(col*uExposure);
+      col=toSRGB(col);
+      gl_FragColor=vec4(col,1.0);
+    }`,
+  depthTest:false, depthWrite:false,
+});
+function sizePostFX(){
+  const w=Math.max(2,Math.floor(canvas.width)), h=Math.max(2,Math.floor(canvas.height));
+  const bw=Math.max(2,w>>2), bh=Math.max(2,h>>2);
+  if(rtScene){ rtScene.setSize(w,h); rtBright.setSize(bw,bh); rtBlur.setSize(bw,bh); }
+  else{
+    rtScene=new THREE.WebGLRenderTarget(w,h,{type:THREE.HalfFloatType,samples:4});
+    rtBright=new THREE.WebGLRenderTarget(bw,bh,{type:THREE.HalfFloatType});
+    rtBlur=new THREE.WebGLRenderTarget(bw,bh,{type:THREE.HalfFloatType});
+  }
+  blurMat.uniforms.uRes.value.set(bw,bh);
+}
+
+// ---------- wet-road reflections ----------
+// streak planes are ONLY ever created directly beneath a visible light source
+const streakMats=[];
+function groundStreak(x,z,tint,len=6,w=1.2,op=0.16,y=0.13){
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(w,len),
+    new THREE.MeshBasicMaterial({ map:streakTex, color:tint, transparent:true, opacity:op,
+      blending:THREE.AdditiveBlending, depthWrite:false }));
+  m.rotation.x=-Math.PI/2; m.position.set(x,y,z);
+  m.material.userData.baseOp=op; streakMats.push(m.material);
+  m.renderOrder=2; scene.add(m); return m;
+}
+let envNightTex=null, envDayTex=null;
+function applyWetRoad(night){
+  if(!roadMat) return;
+  const inner=roadMat.userData.inner;
+  for(const m of [roadMat,inner]){
+    m.envMap=night?envNightTex:envDayTex;
+    m.envMapIntensity=night?0.6:0.3;
+    m.needsUpdate=true;
+  }
+}
+// capture the real scene into cube env maps (night + day) for wet-asphalt reflections
+async function captureWetEnv(){
+  if(!roadMat) return;
+  const mc=moon.castShadow, sc=sun.castShadow;
+  moon.castShadow=false; sun.castShadow=false;
+  try{
+    const mk=()=>{
+      const rt=new THREE.WebGLCubeRenderTarget(128,{type:THREE.HalfFloatType,
+        generateMipmaps:true,minFilter:THREE.LinearMipmapLinearFilter});
+      const cam=new THREE.CubeCamera(0.6,320,rt);
+      cam.position.set(roadX(-8),roadY(-8)+2.2,-8); scene.add(cam);
+      return [rt,cam];
+    };
+    const [rtN,camN]=mk(), [rtD,camD]=mk();
+    setNight(true);  camN.update(renderer,scene); envNightTex=rtN.texture;
+    setNight(false); camD.update(renderer,scene); envDayTex=rtD.texture;
+    setNight(true);
+    scene.remove(camN); scene.remove(camD);
+    applyWetRoad(true);
+    window.__sr.env=true;
+  }catch(e){ console.warn('wet env capture failed:',e); window.__sr.env=false; }
+  moon.castShadow=mc; sun.castShadow=sc;
+}
+
+// ---------- day / night ----------
+const houseGlows=[];
+function setNight(on){
+  document.getElementById('btn-night').classList.toggle('on',on);
+  document.getElementById('btn-day').classList.toggle('on',!on);
+  if(on){
+    scene.background.set(0x060a18); scene.fog.color.set(0x060a18);
+    hemi.intensity=0.95; hemi.color.set(0x2a3a5f); hemi.groundColor.set(0x10141d);
+    moon.intensity=0.7; sun.intensity=0.0;
+    lampLights.forEach(p=>p.intensity=26);
+    houseGlows.forEach(p=>p.intensity=8);
+    if(headlightSpot) headlightSpot.intensity=320;
+    brightMat.uniforms.uThreshold.value=1.0;
+    compMat.uniforms.uStrength.value=0.42;
+    compMat.uniforms.uExposure.value=1.25;
+    skyMat.map=nightSkyTex; ridgeMeshes.forEach(m=>m.visible=true);
+  } else {
+    scene.background.set(0x9fc3e8); scene.fog.color.set(0x9fc3e8);
+    hemi.intensity=1.15; hemi.color.set(0xbfd9ff); hemi.groundColor.set(0x6a7078);
+    moon.intensity=0.0; sun.intensity=2.6;
+    lampLights.forEach(p=>p.intensity=0);
+    houseGlows.forEach(p=>p.intensity=0);
+    if(headlightSpot) headlightSpot.intensity=0;
+    brightMat.uniforms.uThreshold.value=1.05;
+    compMat.uniforms.uStrength.value=0.32;
+    compMat.uniforms.uExposure.value=1.0;
+    skyMat.map=daySkyTex; ridgeMeshes.forEach(m=>m.visible=false);
+  }
+  skyMat.needsUpdate=true;
+  for(const m of streakMats) m.opacity=m.userData.baseOp*(on?1:0.22);
+  applyWetRoad(on);
+  window.__sr.night=on;
+  markDirty();
+}
+document.getElementById('btn-day').onclick=()=>setNight(false);
+document.getElementById('btn-night').onclick=()=>setNight(true);
+
+// ---------- inline orbit (showroom pattern) ----------
+const orbit={ theta:0.02, phi:1.30, radius:26, target:new THREE.Vector3(0,2.8,-22), auto:false };
+let dragging=false,px=0,py=0;
+canvas.addEventListener('pointerdown',e=>{dragging=true;px=e.clientX;py=e.clientY;orbit.auto=false;canvas.setPointerCapture(e.pointerId);});
+canvas.addEventListener('pointermove',e=>{
+  if(!dragging) return;
+  orbit.theta-=(e.clientX-px)*0.007;
+  orbit.phi=THREE.MathUtils.clamp(orbit.phi-(e.clientY-py)*0.007,0.12,Math.PI-0.08);
+  px=e.clientX;py=e.clientY; markDirty();
+});
+canvas.addEventListener('pointerup',()=>{dragging=false;});
+canvas.addEventListener('pointercancel',()=>{dragging=false;});
+canvas.addEventListener('wheel',e=>{
+  e.preventDefault();
+  orbit.radius=THREE.MathUtils.clamp(orbit.radius*(1+Math.sign(e.deltaY)*0.1),4,200);
+  orbit.auto=false; markDirty();
+},{passive:false});
+
+function streetView(){
+  orbit.target.set(0,2.8,-22);
+  orbit.theta=0.02; orbit.phi=1.30; orbit.radius=26; orbit.auto=false;
+  markDirty();
+}
+function setView(theta,phi,radius,tx,ty,tz){
+  orbit.theta=theta; orbit.phi=phi; orbit.radius=radius;
+  orbit.target.set(tx,ty,tz); orbit.auto=false;
+  markDirty();
+}
+document.getElementById('btn-cam').onclick=streetView;
+
+let needsRender=true;
+const markDirty=()=>{needsRender=true;};
+
+function sizeRenderer(){
+  const w=window.innerWidth,h=window.innerHeight;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+  renderer.setSize(w,h,false);
+  camera.aspect=w/h; camera.updateProjectionMatrix();
+  sizePostFX();
+  markDirty();
+}
+window.addEventListener('resize',sizeRenderer);
+
+// ---------- assembly ----------
+async function build(){
+  // real CJK glyphs for every sign — wait for the system JP fonts first
+  try{
+    await Promise.all([
+      document.fonts.load(`900 100px ${CJK_FONT}`,'南稜トンネル点灯せよ'),
+      document.fonts.load(`900 100px ${CJK_SERIF}`,'南稜トンネル'),
+    ]);
+  }catch(e){ console.warn('font preload failed',e); }
+
+  buildTerrain();
+  buildRoads();
+  buildPortal();
+  buildTube();
+  buildGuardrails();
+
+  // lamps: alternating sides, heads over the road + one at the portal
+  const lamps=[
+    buildLamp(roadX(20)-4.9,20, 1),
+    buildLamp(roadX(8)+4.9,8, -1),
+    buildLamp(roadX(-4)-4.9,-4, 1),
+    buildLamp(roadX(-16)+4.9,-16, -1),
+    buildLamp(roadX(-26)+4.9,-26, -1),
+  ];
+  for(const l of lamps){
+    groundStreak(l.userData.headX, l.userData.headZ-1.5, 0xffa63d, 9, 1.7, 0.34, roadY(l.userData.headZ)+0.05);
+  }
+  // tunnel-mouth glow streak on the wet asphalt
+  groundStreak(0,-27.5,0xff9a3e,10,3.4,0.30,roadY(-27.5)+0.05);
+
+  buildPoles();
+  buildSigns();
+
+  // houses: gable / hip / gable, sunk into the slopes on stone foundations
+  const kinds=[0,1,0,1,0,0];
+  const built=[];
+  houseSpots.forEach(([x,z],i)=>{
+    built.push(buildHouse(x,z, (i*1.7)%6.28, kinds[i], 500+i*13));
+  });
+  // warm spill from every house: lit facades, open-for-business read (no ghost town)
+  for(const bi of [0,1,2,3,4,5]){
+    const h=built[bi];
+    const p=new THREE.PointLight(0xffc37a,8,17,1.8);
+    const fx=Math.sin(h.rotY), fz=Math.cos(h.rotY);
+    p.position.set(h.x+fx*3.2, h.winY+0.6, h.z+fz*3.2); scene.add(p); houseGlows.push(p);
+  }
+
+  buildTrees();
+  buildRocks();
+  const sedan=buildSedan();
+  // headlight wash streak + taillight smear under the sedan (traces to the car)
+  groundStreak(sedan.position.x,sedan.position.z-3.4,0xfff2d8,7,2.0,0.30,roadY(-13)+0.05);
+  groundStreak(sedan.position.x,sedan.position.z+2.6,0xff2a2a,4,1.8,0.22,roadY(-13)+0.05);
+
+  statusEl.textContent='ready — South Ridge v2 · procedural ridge rebuild';
+}
+
+// ---------- render: scene(HDR+MSAA) -> bright -> blurH -> blurV -> composite ----------
+function renderFrame(){
+  const sp=Math.sin(orbit.phi);
+  camera.position.set(
+    orbit.target.x+orbit.radius*sp*Math.sin(orbit.theta),
+    orbit.target.y+orbit.radius*Math.cos(orbit.phi),
+    orbit.target.z+orbit.radius*sp*Math.cos(orbit.theta));
+  camera.lookAt(orbit.target);
+  renderer.setRenderTarget(rtScene);
+  renderer.render(scene,camera);
+  brightMat.uniforms.tSrc.value=rtScene.texture;
+  postQuad.material=brightMat;
+  renderer.setRenderTarget(rtBright);
+  renderer.render(postScene,postCam);
+  blurMat.uniforms.tSrc.value=rtBright.texture;
+  blurMat.uniforms.uDir.value.set(1,0);
+  postQuad.material=blurMat;
+  renderer.setRenderTarget(rtBlur);
+  renderer.render(postScene,postCam);
+  blurMat.uniforms.tSrc.value=rtBlur.texture;
+  blurMat.uniforms.uDir.value.set(0,1);
+  renderer.setRenderTarget(rtBright);
+  renderer.render(postScene,postCam);
+  compMat.uniforms.tScene.value=rtScene.texture;
+  compMat.uniforms.tBloom.value=rtBright.texture;
+  postQuad.material=compMat;
+  renderer.setRenderTarget(null);
+  renderer.render(postScene,postCam);
+}
+function loop(){
+  requestAnimationFrame(loop);
+  if(orbit.auto){orbit.theta+=0.003;needsRender=true;}
+  if(!needsRender) return;
+  needsRender=false;
+  renderFrame();
+}
+
+window.__sr={ night:true, ready:false, env:false, setNight, streetView, setView, scene, camera,
+  renderOnce:()=>renderFrame(),
+  state:()=>({ ready:window.__sr.ready, night:window.__sr.night, env:window.__sr.env,
+    objects:scene.children.length,
+    cam:camera.position.toArray().map(v=>+v.toFixed(2)) }) };
+
+sizeRenderer();
+setNight(true);
+streetView();
+build().then(async ()=>{
+  await captureWetEnv();
+  window.__sr.ready=true;
+  statusEl.textContent='ready — South Ridge v2 · procedural ridge rebuild';
+  markDirty();
+}).catch(err=>{
+  statusEl.textContent='LOAD ERROR: '+(err.message||err);
+  window.__sr.error=String(err);
+});
+loop();
+</script>
+</body>
+</html>
