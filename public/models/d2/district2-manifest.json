@@ -1,0 +1,196 @@
+{
+  "scene": "district2-night-dock",
+  "units": "meters",
+  "notes": "Blender +Z-up source; three.js Y-up in GLB",
+  "categories": {
+    "buildings": [
+      {
+        "name": "bt-d2-warehouse-a",
+        "footprint_m": [
+          14.8,
+          24.8
+        ],
+        "height_m": 9.7
+      },
+      {
+        "name": "bt-d2-warehouse-b",
+        "footprint_m": [
+          12.8,
+          20.8
+        ],
+        "height_m": 8.7
+      }
+    ],
+    "containers": [
+      {
+        "name": "bt-d2-container-blue",
+        "footprint_m": [
+          2.44,
+          6.06
+        ],
+        "height_m": 2.59
+      },
+      {
+        "name": "bt-d2-container-red",
+        "footprint_m": [
+          2.44,
+          6.06
+        ],
+        "height_m": 2.59
+      },
+      {
+        "name": "bt-d2-container-green",
+        "footprint_m": [
+          2.44,
+          6.06
+        ],
+        "height_m": 2.59
+      },
+      {
+        "name": "bt-d2-container-steel",
+        "footprint_m": [
+          2.44,
+          6.06
+        ],
+        "height_m": 2.59
+      },
+      {
+        "name": "bt-d2-container-orange",
+        "footprint_m": [
+          2.44,
+          6.06
+        ],
+        "height_m": 2.59
+      }
+    ],
+    "cranes": [
+      {
+        "name": "bt-d2-crane",
+        "footprint_m": [
+          16.5,
+          46.0
+        ],
+        "height_m": 25.6
+      }
+    ],
+    "lighting": [
+      {
+        "name": "bt-d2-floodlight",
+        "footprint_m": [
+          1.0,
+          1.0
+        ],
+        "height_m": 11.6
+      }
+    ],
+    "props": [
+      {
+        "name": "bt-d2-pole",
+        "footprint_m": [
+          0.5,
+          0.5
+        ],
+        "height_m": 9.2
+      },
+      {
+        "name": "bt-d2-cone",
+        "footprint_m": [
+          0.42,
+          0.42
+        ],
+        "height_m": 0.75
+      },
+      {
+        "name": "bt-d2-barrel",
+        "footprint_m": [
+          0.62,
+          0.62
+        ],
+        "height_m": 0.93
+      },
+      {
+        "name": "bt-d2-pallet",
+        "footprint_m": [
+          1.2,
+          1.0
+        ],
+        "height_m": 1.2
+      }
+    ],
+    "vehicles": [
+      {
+        "name": "bt-d2-forklift",
+        "footprint_m": [
+          1.3,
+          3.6
+        ],
+        "height_m": 2.5
+      },
+      {
+        "name": "bt-d2-truck",
+        "footprint_m": [
+          2.6,
+          8.6
+        ],
+        "height_m": 3.7
+      }
+    ],
+    "signs": [
+      {
+        "name": "bt-d2-sign-warehouse",
+        "words": "倉庫",
+        "footprint_m": [
+          0.8,
+          2.04
+        ],
+        "height_m": 2.5
+      },
+      {
+        "name": "bt-d2-sign-transport",
+        "words": "運送",
+        "footprint_m": [
+          0.8,
+          2.04
+        ],
+        "height_m": 2.5
+      },
+      {
+        "name": "bt-d2-sign-24h",
+        "words": "24時間",
+        "footprint_m": [
+          0.8,
+          2.6399999999999997
+        ],
+        "height_m": 2.2
+      },
+      {
+        "name": "bt-d2-sign-port",
+        "words": "港",
+        "footprint_m": [
+          0.8,
+          1.34
+        ],
+        "height_m": 2.3
+      }
+    ],
+    "roads": [
+      {
+        "name": "bt-d2-ground",
+        "footprint_m": [
+          68.0,
+          104.0
+        ],
+        "height_m": 0.26
+      },
+      {
+        "name": "bt-d2-markings",
+        "footprint_m": [
+          16.0,
+          104.0
+        ],
+        "height_m": 0.02
+      }
+    ]
+  },
+  "asset_count": 21
+}
