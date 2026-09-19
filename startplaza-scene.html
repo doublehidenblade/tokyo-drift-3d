@@ -38,7 +38,9 @@ const statusEl = document.getElementById('status');
 const canvas = document.getElementById('view');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
+// Neutral preserves shadow detail far better than ACES for night scenes —
+// ACES crushed the street/facades to pure black (the "void" look).
+renderer.toneMapping = THREE.NeutralToneMapping;
 renderer.toneMappingExposure = 1.35;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;   // PCFSoftShadowMap deprecated in r185+
@@ -167,10 +169,10 @@ function roadTexture(){
   const W=512, L=2048; // maps x[-7,7] -> [0,W], z[14,-116] -> [0,L] (130 m)
   const [c,g]=cnv(W,L);
   const rnd=mulberry32(99);
-  g.fillStyle='#0b0d12'; g.fillRect(0,0,W,L);
+  g.fillStyle='#171a21'; g.fillRect(0,0,W,L);   // lifted albedo so the road catches light
   for(let i=0;i<9000;i++){ // asphalt speckle
     const v=rnd();
-    g.fillStyle=`rgba(${20+v*30|0},${22+v*32|0},${26+v*36|0},${0.16+rnd()*0.2})`;
+    g.fillStyle=`rgba(${30+v*40|0},${32+v*42|0},${38+v*48|0},${0.22+rnd()*0.25})`;
     g.fillRect(rnd()*W, rnd()*L, 1.6, 1.6);
   }
   const zToY=z=>(14-z)/130*L;
@@ -199,7 +201,7 @@ function roadTexture(){
 // --- concrete sidewalk ---
 function concreteTexture(){
   const [c,g]=cnv(256,1024); const rnd=mulberry32(7);
-  g.fillStyle='#23262e'; g.fillRect(0,0,256,1024);
+  g.fillStyle='#2e323b'; g.fillRect(0,0,256,1024);
   for(let i=0;i<2600;i++){ const v=rnd(); g.fillStyle=`rgba(${40+v*24|0},${42+v*24|0},${48+v*26|0},0.25)`; g.fillRect(rnd()*256,rnd()*1024,2,2); }
   g.strokeStyle='rgba(0,0,0,0.5)'; g.lineWidth=3;
   for(let y=0;y<1024;y+=128){ g.beginPath(); g.moveTo(0,y); g.lineTo(256,y); g.stroke(); }
@@ -295,7 +297,7 @@ function skylineTexture(){
 
 // ---------- lights ----------
 const hemi = new THREE.HemisphereLight(0x33436e, 0x0a0c12, 0.55); scene.add(hemi);
-const moon = new THREE.DirectionalLight(0x8fb0ff, 0.55);
+const moon = new THREE.DirectionalLight(0x8fb0ff, 0.75);
 moon.position.set(-25, 42, 30); moon.castShadow = true;
 moon.shadow.mapSize.set(2048, 2048);
 moon.shadow.camera.left=-70; moon.shadow.camera.right=70;
@@ -364,7 +366,7 @@ function applyDim(night){
 // ---------- ground: mirror-wet asphalt, sidewalks, curbs ----------
 function buildGround(){
   const base=new THREE.Mesh(new THREE.PlaneGeometry(400,400),
-    new THREE.MeshStandardMaterial({ color:0x05060a, roughness:0.95 }));
+    new THREE.MeshStandardMaterial({ color:0x0c0e13, roughness:0.95 }));
   base.rotation.x=-Math.PI/2; base.position.set(0,-0.08,-50); base.receiveShadow=true; scene.add(base);
 
   const road=new THREE.Mesh(new THREE.PlaneGeometry(14,130),
@@ -543,9 +545,15 @@ function makeBuilding(b){
   const g=new THREE.Group();
   const depth=10, cx=b.x + (b.dir>0? -depth/2 : depth/2); // center behind facade
   const fx=b.x; // facade plane
-  const ft=facadeTexture({ w:b.w, h:b.h, stories:b.stories, tint:b.tint, seed:b.seed, lit:0.5 });
-  const sideMat=new THREE.MeshStandardMaterial({ color:0x1d2330, roughness:0.85 });
-  const facMat=new THREE.MeshStandardMaterial({ map:ft, roughness:0.8 });
+  const ft=facadeTexture({ w:b.w, h:b.h, stories:b.stories, tint:b.tint, seed:b.seed, lit:0.62 });
+  const sideMat=new THREE.MeshStandardMaterial({ color:0x252b3a, roughness:0.85 });
+  // The facade texture paints lit windows, but without emissive they multiplied
+  // against dim night lighting and read black — the "void" bug. The emissiveMap
+  // makes the warm windows actually glow (dark texels emit ~nothing), and it is
+  // dimmed by day through the same dimming registry as the signage.
+  const facMat=new THREE.MeshStandardMaterial({ map:ft, emissive:0xffffff,
+    emissiveMap:ft, emissiveIntensity:1.15, roughness:0.8 });
+  regDimStd(facMat, 1.15);
   const topMat=new THREE.MeshStandardMaterial({ color:0x15171e, roughness:0.95 });
   // material order: +x,-x,+y,-y,+z,-z
   const mats = b.dir>0 ? [facMat, sideMat, topMat, topMat, sideMat, sideMat]
@@ -826,7 +834,7 @@ function setNight(on){
     // night ambient: strong enough that no facade or road reads pitch black
     // (real night street with this many emitters has real bounce light)
     hemi.intensity=0.9; hemi.color.set(0x46547e); hemi.groundColor.set(0x161220);
-    moon.intensity=0.55; sun.intensity=0.0;
+    moon.intensity=0.75; sun.intensity=0.0;
     archGlow.intensity=60; shopLights.forEach(p=>p.intensity=26);
     lampLights.forEach(p=>p.intensity=26); blueFill.intensity=26;
     renderer.toneMappingExposure=1.35;
