@@ -34,6 +34,7 @@
 <script type="module">
 import * as THREE from './vendor/three.module.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
+import { Water } from './vendor/Water.js'; // planar-reflection canal water (three/examples/jsm, vendored)
 
 const MDIR = './public/models/harborwest/';
 const statusEl = document.getElementById('status');
@@ -318,8 +319,7 @@ const moonHalo = new THREE.Mesh(new THREE.CircleGeometry(16, 32),
 moonHalo.position.copy(moonDisc.position); moonHalo.lookAt(0, 10, -30); scene.add(moonHalo);
 const townTexNight = townSkylineTexture(true), townTexDay = townSkylineTexture(false);
 const townMat = new THREE.MeshBasicMaterial({ map: townTexNight, transparent:true, fog:false, depthWrite:false });
-// harbor-west animated water uniforms (material assigned when the GLB loads)
-const hwWaterUniforms = { uTime:{ value:0 }, uNight:{ value:1 } };
+// (round 4: old hwWaterUniforms custom water shader replaced by Water.js — see WATER_Y section)
 const town = new THREE.Mesh(new THREE.PlaneGeometry(340, 62), townMat);
 town.position.set(150, 20, -45); town.rotation.y = -Math.PI/2; scene.add(town);
 
@@ -338,10 +338,11 @@ function setNight(on){
     winLitMat.emissiveIntensity=1.9; winDimMat.emissiveIntensity=0.85;
     doorGlowMat.emissiveIntensity=2.2; boatGlassLitMat.emissiveIntensity=1.7;
     lampHeadMats.forEach(m=>{ m.emissive.set(0xffa63d); m.emissiveIntensity=2.6; });
+    shipNightMats.forEach(m=>{ m.emissiveIntensity = m.userData.nightI || 3.0; });
     renderer.toneMappingExposure=1.25;
     skyMat.map = nightSkyTex;
     townMat.map = townTexNight;
-    hwWaterUniforms.uNight.value = 1;
+    tuneHarborWater(true); // Water.js: moonlight glitter + deep-night water color
     moonDisc.visible = moonHalo.visible = town.visible = true;
   } else {
     scene.background.set(0x9fc3e8); scene.fog.color.set(0x9fc3e8);
@@ -355,10 +356,11 @@ function setNight(on){
     winLitMat.emissiveIntensity=0; winDimMat.emissiveIntensity=0;
     doorGlowMat.emissiveIntensity=0; boatGlassLitMat.emissiveIntensity=0;
     lampHeadMats.forEach(m=>{ m.emissiveIntensity=0.0; });
+    shipNightMats.forEach(m=>{ m.emissiveIntensity = 0.0; });
     renderer.toneMappingExposure=1.0;
     skyMat.map = daySkyTex;
     townMat.map = townTexDay;
-    hwWaterUniforms.uNight.value = 0;
+    tuneHarborWater(false); // Water.js: sun glitter + steel-blue day water
     moonDisc.visible = moonHalo.visible = false; town.visible = true;
   }
   skyMat.needsUpdate = true;
@@ -449,14 +451,65 @@ function applySignTexture(obj, key){
   });
 }
 
-const streakTex = streakTexture();
 const WATER_Y = -1.26;
-function waterReflection(x, z, tint, len=11, w=2.4, opacity=0.5){
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, len),
-    new THREE.MeshBasicMaterial({ map: streakTex, color: tint, transparent:true,
-      opacity, blending: THREE.AdditiveBlending, depthWrite:false }));
-  m.rotation.x = -Math.PI/2; m.position.set(x, WATER_Y+0.04, z); scene.add(m);
+// ---------- canal water: three.js Water.js — real planar reflections ----------
+// QA-fix round 4 (2026-09-19): the hand-shaded canal water read flat ("lame").
+// Water.js (vendored in vendor/Water.js) renders a true planar mirror pass — the
+// same treatment as the Bay Strait scene — so lamps, boats, the ship and the new
+// bridge reflect for real, day and night. waterNormals is a procedural tileable
+// normal map: wrapped box-blurred white noise, incoherent at every scale Water.js
+// samples (sparse sinusoids beat into giant visible bands). No external assets.
+function waterNormalTexture(){
+  const S = 256;
+  const c = document.createElement('canvas'); c.width = c.height = S;
+  const g = c.getContext('2d'), img = g.createImageData(S, S), d = img.data;
+  const rnd = mulberry32(77);
+  let h = new Float32Array(S*S);
+  for(let i=0;i<S*S;i++) h[i] = rnd();
+  for(let pass=0; pass<2; pass++){
+    const n = new Float32Array(S*S);
+    for(let y=0;y<S;y++) for(let x=0;x<S;x++){
+      let s = 0;
+      for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++)
+        s += h[(((y+dy+S)%S)*S) + ((x+dx+S)%S)];
+      n[y*S+x] = s/9;
+    }
+    h = n;
+  }
+  const str = 2.2;
+  for(let y=0;y<S;y++) for(let x=0;x<S;x++){
+    const dx = (h[y*S+((x+1)%S)] - h[y*S+((x-1+S)%S)])*str;
+    const dy = (h[((y+1)%S)*S+x] - h[((y-1+S)%S)*S+x])*str;
+    const inv = 1/Math.hypot(dx, dy, 1), o = (y*S+x)*4;
+    d[o]   = (-dx*inv*0.5+0.5)*255;
+    d[o+1] = (-dy*inv*0.5+0.5)*255;
+    d[o+2] = (inv*0.5+0.5)*255;
+    d[o+3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
 }
+// sun/moon directions match this scene's directional lights (position -> target)
+const sunDirHW = new THREE.Vector3(40,50,60).normalize();
+const moonDirHW = new THREE.Vector3(60,55,-10).normalize();
+let hwWater = null; // the real Water mesh, rebuilt over the GLB canal slab in build()
+function tuneHarborWater(night){
+  if(!hwWater) return;
+  const u = hwWater.material.uniforms;
+  if(night){
+    u['sunDirection'].value.copy(moonDirHW);
+    u['sunColor'].value.set(0x33456e);     // dim moonlight glitter
+    u['waterColor'].value.set(0x071a30);
+  } else {
+    u['sunDirection'].value.copy(sunDirHW);
+    u['sunColor'].value.set(0xffffff);
+    u['waterColor'].value.set(0x0e3050);   // steel-blue canal water
+  }
+  u['distortionScale'].value = 1.1;
+}
+// (round 4: fake waterReflection streak planes removed — Water.js reflects the real scene)
 
 // coiled mooring rope: grounded stack of tori on the quay deck
 const ropeMat = new THREE.MeshStandardMaterial({ color:0x8a6f4d, roughness:1.0, metalness:0.0 });
@@ -487,6 +540,9 @@ function mooringLine(ax,ay,az, bx,by,bz, sag=0.35){
 
 // shared emissive materials, collected during build
 const lampHeadMats = [];
+// QA-fix round 4: the container ship's own night lights (kept separate from
+// lampHeadMats because setNight() recolors those amber — nav lights stay red/green).
+const shipNightMats = []; // {mat, nightI} — emissive intensity toggled by setNight
 const navGlowMat = new THREE.MeshBasicMaterial({ color:0xffd9a0, transparent:true, opacity:0.9,
   blending:THREE.AdditiveBlending, depthWrite:false, fog:false });
 
@@ -633,9 +689,9 @@ function buildCargoShip(){
   // stern castle: white block, cabin window bands, lit bridge, full-beam bridge wings
   const cz0=-16.5;
   bx(7.5, 6.5, 4.5, castleM, 0, deckY+3.25, cz0);
-  bx(7.62, 0.70, 4.62, winDimMat, 0, deckY+2.20, cz0);
-  bx(7.62, 0.70, 4.62, winDimMat, 0, deckY+3.85, cz0);
-  bx(7.62, 0.85, 4.62, winLitMat, 0, deckY+5.45, cz0);          // bridge, lit at night
+  bx(7.62, 0.70, 4.62, winLitMat, 0, deckY+2.20, cz0);           // cabins, lit at night (round 4)
+  bx(7.62, 0.70, 4.62, winLitMat, 0, deckY+3.85, cz0);           // cabins, lit at night (round 4)
+  bx(7.62, 0.85, 4.62, winLitMat, 0, deckY+5.45, cz0);           // bridge, lit at night
   bx(9.5, 0.40, 1.6, castleM, 0, deckY+4.95, cz0+2.9);         // bridge wings to full beam
   // funnel with white company band
   const funnelM=new THREE.MeshStandardMaterial({ color:0xb03a28, roughness:0.6 });
@@ -662,12 +718,38 @@ function buildCargoShip(){
   for (const [wx,wz] of [[-4.2,14],[4.2,14],[-4.2,-17],[4.2,-17]])
     bx(0.35, 0.5, 0.35, bulwarkM, wx, deckY+0.35, wz);
   // warm working light over the deck at night
-  const deckLight=new THREE.PointLight(0xffb45e, 0, 30, 1.8);
-  deckLight.userData.night=16; deckLight.position.set(0, deckY+7, -6); g.add(deckLight);
+  const deckLight=new THREE.PointLight(0xffb45e, 0, 34, 1.7);
+  deckLight.userData.night=34; deckLight.position.set(0, deckY+7, -6); g.add(deckLight);
   interiorLights.push(deckLight);
+  // QA-fix round 4: real working lights — Craig: "the tanker is pitch black"
+  // deck floodlight poles (fore + aft): warm heads + night point lights
+  const floodHeadM = new THREE.MeshStandardMaterial({ color:0x201408, emissive:0xffe2ae, emissiveIntensity:0, roughness:0.5 });
+  floodHeadM.userData.nightI = 3.2; shipNightMats.push(floodHeadM);
+  for (const fz of [12, -12]){
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.08,0.12,4.6,8), mastM);
+    pole.position.set(0, deckY+2.3, fz); pole.castShadow = true; g.add(pole);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.22,10,8), floodHeadM);
+    head.position.set(0, deckY+4.7, fz); g.add(head);
+    const fl = new THREE.PointLight(0xffd9a0, 0, 34, 1.7);
+    fl.userData.night = 40; fl.position.set(0, deckY+4.6, fz); g.add(fl); interiorLights.push(fl);
+  }
+  // funnel top light
+  const funnelLamp = new THREE.Mesh(new THREE.SphereGeometry(0.15,10,8), floodHeadM);
+  funnelLamp.position.set(0, deckY+9.25, cz0-1.2); g.add(funnelLamp);
+  // red (port, -x) / green (starboard, +x) nav lights at the bridge wings + halos
+  const mkNav = (color, x)=>{
+    const m = new THREE.MeshStandardMaterial({ color:0x0a0505, emissive:color, emissiveIntensity:0, roughness:0.5 });
+    m.userData.nightI = 4.0; shipNightMats.push(m);
+    const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.18,10,8), m);
+    lamp.position.set(x, deckY+5.6, cz0+2.9); g.add(lamp);
+    const halo = new THREE.Mesh(new THREE.SphereGeometry(0.42,12,10), new THREE.MeshBasicMaterial({
+      color, transparent:true, opacity:0.5, blending:THREE.AdditiveBlending, depthWrite:false, fog:false }));
+    halo.position.copy(lamp.position); g.add(halo);
+  };
+  mkNav(0xff2222, -4.85); mkNav(0x22ff44, 4.85);
   g.position.set(42, 0, -44); g.rotation.y=-0.12; // mid-canal, clear of the quay
   scene.add(g);
-  waterReflection(42, -44, 0xffc37a, 34, 8, 0.45); // hull reflection on the canal
+  // (round 4: hull reflects for real in Water.js now)
   return g;
 }
 
@@ -677,40 +759,29 @@ async function build(){
   const DECK = 0.2; // quay/apron deck top
 
   const ground = await place('bt-hw-ground.glb', 0, 0, -30);
-  // animated canal water: replace the flat GLB water material with a live shader
-  hwWaterUniforms.uTime.value = 0; hwWaterUniforms.uNight.value = 1;
-  const hwWaterMat = new THREE.ShaderMaterial({
-    uniforms: hwWaterUniforms, fog:false,
-    vertexShader:`
-      varying vec2 vUv; varying vec3 vWp;
-      void main(){ vUv=uv; vec4 w=modelMatrix*vec4(position,1.0); vWp=w.xyz;
-        gl_Position=projectionMatrix*viewMatrix*w; }`,
-    fragmentShader:`
-      uniform float uTime; uniform float uNight;
-      varying vec2 vUv; varying vec3 vWp;
-      void main(){
-        // moving ripple bands (fragment-only: works on unsubdivided GLB quads)
-        float r1 = sin(vWp.x*0.9 + uTime*1.4)*sin(vWp.z*1.1 - uTime*1.1);
-        float r2 = sin((vWp.x+vWp.z)*0.35 + uTime*0.7);
-        float ripple = r1*0.5 + r2*0.5;
-        vec3 deep = mix(vec3(0.09,0.22,0.38), vec3(0.02,0.06,0.14), uNight);
-        vec3 lift = mix(vec3(0.14,0.38,0.52), vec3(0.04,0.12,0.24), uNight);
-        vec3 col = mix(deep, lift, smoothstep(-0.9, 0.9, ripple));
-        // lamp glints: warm sparkles drifting on the ripples
-        float g = pow(max(0.0, sin(vWp.x*2.1+uTime*2.0)*sin(vWp.z*1.7-uTime*1.6)), 6.0);
-        col += vec3(1.0,0.62,0.28) * g * mix(0.25, 0.85, uNight);
-        // cool moon/sky sheen
-        float s = pow(max(0.0, sin(vWp.x*0.23-uTime*0.4)), 3.0);
-        col += mix(vec3(0.25,0.35,0.5), vec3(0.08,0.14,0.26), uNight) * s * 0.5;
-        gl_FragColor = vec4(col, 1.0);
-      }`,
-  });
-  ground.traverse(n=>{ // dark canal water: deep blue + lamp-catching sheen
-    if(n.isMesh && n.material && n.material.name === 'bt-hw-ground_water'){
-      n.material = hwWaterMat;
+  // real planar-reflection canal water: rebuild the GLB canal slab as a Water mesh
+  ground.traverse(n=>{
+    if(n.isMesh && n.material && n.material.name === 'bt-hw-ground_water' && !hwWater){
+      hwWater = new Water(n.geometry, {
+        textureWidth:512, textureHeight:512,   // reflection RT; 512 keeps perf sane
+        waterNormals: waterNormalTexture(),
+        sunDirection: moonDirHW.clone(),      // night default; setNight() re-tunes
+        sunColor: 0x33456e,
+        waterColor: 0x071a30,
+        distortionScale: 1.1,                 // low: keep lamp/boat reflections crisp
+        fog: true,                            // scene.fog is set — keep the far shore hazy
+        alpha: 1.0
+      });
+      // NOTE: `size` is not a Water constructor option in this three version —
+      // set the uniform directly (finer normal tiling: ripple, not bands).
+      hwWater.material.uniforms['size'].value = 2.2;
+      hwWater.position.copy(n.position);
+      hwWater.quaternion.copy(n.quaternion);
+      hwWater.scale.copy(n.scale);
+      n.parent.add(hwWater); n.parent.remove(n);
     }
   });
-  jobs.push(Promise.resolve(ground));
+  tuneHarborWater(window.__hw.night);
   jobs.push(place('bt-hw-markings.glb', 0, 0, -30));
 
   // --- wooden warehouses, west side, facades facing the road/canal (+X) ---
@@ -734,10 +805,9 @@ async function build(){
       });
       return o;
     }));
-    waterReflection(11.6, z, 0xffa63d, 13, 2.6, 0.7);
+    // (round 4: lamp streaks removed — Water.js reflects the real lamps)
   }
-  // moon streak on the water
-  waterReflection(30, -34, 0xaac4ff, 26, 3.4, 0.35);
+  // (round 4: fake moon streak removed — Water.js does the real moon glitter)
 
   // --- mooring bollards + coiled ropes + tire fenders + life rings ---
   const bollardZ = [-8,-20,-32,-44,-56];
@@ -768,7 +838,7 @@ async function build(){
     scene.add(o);
     boatNavLight(o);
     lightBoat(o, cabinLit[bi]);
-    waterReflection(b.x, b.z-1, 0xffc37a, 6, 1.4, 0.6);
+    // (round 4: boat streaks removed — Water.js reflects the real fleet)
     jobs.push(Promise.resolve(o));
   }
   // mooring lines: quay bollards -> boat gunwale cleats (real endpoints both sides)
@@ -780,8 +850,77 @@ async function build(){
   for (const [ax,az,bx,bz] of lineSpans)
     mooringLine(ax, DECK+0.75, az, bx, WATER_Y+0.6, bz, 0.5);
 
+// QA-fix round 4 (2026-09-19): canal-crossing bridge in the Bay Strait style —
+// Craig: "let's use the bridge from bay strait". Twin-tower suspension span across
+// the canal at the south end (z=-64), clear of the fleet and the moored ship.
+// Canal water: x in [10.5, 60.5], z in [-70, 10], surface y=-1.3.
+const harborBridgeMats = [];
+function buildHarborBridge(){
+  const g = new THREE.Group();
+  const BZ = -64;
+  const whiteM = new THREE.MeshStandardMaterial({ color:0xdfe8f2, roughness:0.45, metalness:0.25 });
+  const concM = new THREE.MeshStandardMaterial({ color:0x9aa0a8, roughness:0.9 });
+  const landM = new THREE.MeshStandardMaterial({ color:0x141a24, roughness:1 });
+  const cableM = new THREE.MeshBasicMaterial({ color:0xd8e6f8 });
+  const bx=(w,h,d,mat,x,y,z)=>{
+    const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat);
+    m.position.set(x,y,z); m.castShadow=true; m.receiveShadow=true; g.add(m); return m;
+  };
+  // anchor cape — the bridge always lands on real ground (far side is open water edge)
+  bx(36, 5, 46, landM, 80, -1.5, BZ);
+  // anchor blocks
+  bx(10, 8, 14, concM, 2, 2.5, BZ);
+  bx(10, 8, 14, concM, 69, 2.5, BZ);
+  // deck: x from 2 to 69, top at y=11.1
+  bx(67, 2.2, 9, new THREE.MeshStandardMaterial({ color:0x646b76, roughness:0.6 }), 35.5, 10, BZ);
+  // glowing edge lines along the deck (the lit-deck signature)
+  const edgeM = new THREE.MeshBasicMaterial({ color:0xcfe8ff });
+  for(const dz of [-4.2, 4.2]) bx(67, 0.32, 0.32, edgeM, 35.5, 11.25, BZ+dz);
+  // towers: portal frames on concrete footings standing in the canal
+  const towerTop = 36;
+  for(const tx of [20, 51]){
+    bx(9, 5, 11, concM, tx, -2, BZ); // footing: 2 m proud of the water
+    for(const dz of [-5.5, 5.5])
+      bx(2.2, 38, 2.4, whiteM, tx, 17, BZ+dz);
+    bx(2.8, 3.0, 15.5, whiteM, tx, 14, BZ);
+    bx(2.4, 2.4, 15.5, whiteM, tx, 29, BZ);
+    const bc = new THREE.Mesh(new THREE.SphereGeometry(0.45, 10, 10),
+      new THREE.MeshStandardMaterial({ color:0x220000, emissive:0xff2222, emissiveIntensity:3 }));
+    bc.position.set(tx, towerTop+1.0, BZ); g.add(bc); harborBridgeMats.push(bc.material);
+    const wl = new THREE.PointLight(0xbfe0ff, 0, 70, 1.7);
+    wl.userData.night = 18; wl.position.set(tx, 22, BZ); g.add(wl); interiorLights.push(wl);
+  }
+  // main cables: catenary over both tower tops, two planes; side spans run down
+  // into the anchor blocks — no floating cable ends
+  for(const dz of [-4.8, 4.8]){
+    const pts = [
+      new THREE.Vector3(2, 12, BZ+dz),
+      new THREE.Vector3(20, towerTop-1, BZ+dz),
+      new THREE.Vector3(35.5, 17, BZ+dz),
+      new THREE.Vector3(51, towerTop-1, BZ+dz),
+      new THREE.Vector3(69, 12, BZ+dz),
+    ];
+    const curve = new THREE.CatmullRomCurve3(pts);
+    g.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 64, 0.28, 8), cableM));
+    // suspenders: sample the cable, drop verticals to the deck in the main span
+    const suspM = new THREE.MeshBasicMaterial({ color:0xaecbe8 });
+    const samples = curve.getPoints(200);
+    for(const p of samples){
+      if(p.x < 20 || p.x > 51) continue;
+      if(Math.abs(p.x % 12) > 1.0) continue;
+      const h = p.y - 11.1;
+      if(h < 2) continue;
+      const s = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, h, 6), suspM);
+      s.position.set(p.x, 11.1+h/2, BZ+dz); g.add(s);
+    }
+  }
+  scene.add(g);
+  return g;
+}
+
   // QA-fix (round 3): container ship moored mid-canal — reads as a ship, not a building
   buildCargoShip();
+  buildHarborBridge();
 
   // --- working-gear props: crates, pallets, barrels (fish-market clutter) ---
   jobs.push(place('bt-hw-crate.glb', -9.5, 0.12, -18));
@@ -815,7 +954,7 @@ function loop(){
     orbit.target.y + orbit.radius*Math.cos(orbit.phi),
     orbit.target.z + orbit.radius*sp*Math.cos(orbit.theta));
   camera.lookAt(orbit.target);
-  if(typeof hwWaterUniforms!=='undefined') hwWaterUniforms.uTime.value = performance.now()*0.001;
+  if(hwWater) hwWater.material.uniforms['time'].value = performance.now()*0.001; // drive the Water.js waves
   renderer.render(scene, camera);
 }
 

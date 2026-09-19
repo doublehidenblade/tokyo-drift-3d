@@ -539,9 +539,8 @@ async function build(){
   });
   jobs.push(Promise.resolve(road));
   jobs.push(place('cl-roadmarkings.glb', 0, 0, 0));
-  const walls = await place('cl-retwalls.glb', 0, 0, 0);
-  walls.traverse(n=>{ if(n.isMesh){ n.castShadow=false; n.receiveShadow=true; } });
-  jobs.push(Promise.resolve(walls));
+  // QA-fix round 4 (2026-09-19): the retaining walls (cl-retwalls.glb) were the
+  // "nonsense walls" Craig flagged — removed entirely, hillside blended with rock/pine.
   const harbor = await place('cl-harbor.glb', 0, 0, 0);
   harbor.traverse(n=>{ if(n.isMesh){ n.material.fog = false; } });
   // 3D harbor blocks hidden: side-face UVs shear (diagonal streaks). The
@@ -552,7 +551,8 @@ async function build(){
   // houses / shops / sento — dress windows so the hillside feels lived-in
   harvestWinMats(await loadGLB('cl-house-a.glb'));
   const darkHouses = new Set([3, 11]); // a few houses stay dark; the rest glow warm
-  // (was [3,8,12]: house #8 and stairs #1 removed 2026-09-19 per QA, old #12 is now #11)
+  // (was [3,8,12]: house #8 and stairs #1 removed 2026-09-19 per QA, old #12 is now #11;
+  //  round 4: retaining walls + last staircase removed entirely, hillside blended with rock/pine)
   plc.houses.forEach((h, i)=>{
     jobs.push(place(`cl-house-${h.variant}.glb`, h.x, h.y, h.z, h.rotY).then(o=>{
       dressWindows(o, 5000 + i*131, darkHouses.has(i) ? 0.12 : 0.78);
@@ -669,10 +669,9 @@ async function build(){
       catenary(V(A.x+dx, A.y+7.5, A.z), V(B.x+dx, B.y+7.5, B.z), 1.2);
   }
 
-  // pines / rocks / stairs
+  // pines / rocks (QA round 4: staircase + walls removed, hillside blended with vegetation/rock)
   for(const P of plc.pines) jobs.push(place('cl-pine.glb', P.x, P.y, P.z, P.rotY, P.s));
   for(const R of plc.rocks) jobs.push(place('cl-rock.glb', R.x, R.y, R.z));
-  for(const St of plc.stairs) jobs.push(place('cl-stairs.glb', St.x, St.y, St.z, St.rotY));
 
   // parked sedan, cones, pedestrians
   if(plc.sedan){ const sd=plc.sedan; jobs.push(place('cl-sedan.glb', sd.x, sd.y, sd.z, sd.rotY)); }
