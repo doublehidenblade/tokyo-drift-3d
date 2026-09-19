@@ -551,7 +551,8 @@ async function build(){
 
   // houses / shops / sento — dress windows so the hillside feels lived-in
   harvestWinMats(await loadGLB('cl-house-a.glb'));
-  const darkHouses = new Set([3, 8, 12]); // a few houses stay dark; the rest glow warm
+  const darkHouses = new Set([3, 11]); // a few houses stay dark; the rest glow warm
+  // (was [3,8,12]: house #8 and stairs #1 removed 2026-09-19 per QA, old #12 is now #11)
   plc.houses.forEach((h, i)=>{
     jobs.push(place(`cl-house-${h.variant}.glb`, h.x, h.y, h.z, h.rotY).then(o=>{
       dressWindows(o, 5000 + i*131, darkHouses.has(i) ? 0.12 : 0.78);
