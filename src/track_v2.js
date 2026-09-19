@@ -45,7 +45,49 @@ export class TrackV2 {
       this.chain[i] = p[3];
     }
 
-    // yaw/pitch from central-difference segment tangents.
+    // --- Elevation smoothing (physics-fix, 2026-09-19) ---
+    // The 768 plan samples carry sample-to-sample vertical jitter (mean
+    // |d2y| ~0.0056 m, max ~0.04 m) that the road mesh renders verbatim, so
+    // the car visibly porpoises. Apply a CIRCULAR binomial filter
+    // (1-4-6-4-1)/16, radius 2, to the y column ONLY: XZ and chainage are
+    // untouched, so the horizontal alignment, s<->index mapping and the
+    // tunnel/bridge vertical profile are preserved (extrema checked below).
+    // yaw/pitch are derived AFTER this, so frames, the dense elevation
+    // table, the visual road mesh and physics all see the smoothed profile.
+    const _rawY = new Float64Array(N);
+    for (let i = 0; i < N; i++) _rawY[i] = this.pos[i].y;
+    const _K = [1, 4, 6, 4, 1], _KR = 2;
+    let _yMin0 = Infinity, _yMax0 = -Infinity, _yMin1 = Infinity, _yMax1 = -Infinity;
+    let _maxDy = 0, _sumSqDy = 0;
+    for (let i = 0; i < N; i++) {
+      const r = _rawY[i];
+      if (r < _yMin0) _yMin0 = r;
+      if (r > _yMax0) _yMax0 = r;
+      let acc = 0;
+      for (let k = -_KR; k <= _KR; k++) acc += _K[k + _KR] * _rawY[(i + k + N) % N];
+      const y = acc / 16;
+      this.pos[i].y = y;
+      if (y < _yMin1) _yMin1 = y;
+      if (y > _yMax1) _yMax1 = y;
+      const d = Math.abs(y - r);
+      if (d > _maxDy) _maxDy = d;
+      _sumSqDy += d * d;
+    }
+    // Second-difference (bump) statistics, before vs after.
+    const _d2 = (arr) => {
+      let m = 0, s = 0;
+      for (let i = 0; i < N; i++) {
+        const d2 = Math.abs(arr[(i + 1) % N] - 2 * arr[i] + arr[(i - 1 + N) % N]);
+        if (d2 > m) m = d2;
+        s += d2;
+      }
+      return { max: m, mean: s / N };
+    };
+    const _smY = new Float64Array(N);
+    for (let i = 0; i < N; i++) _smY[i] = this.pos[i].y;
+    const _d2y0 = _d2(_rawY), _d2y1 = _d2(_smY);
+
+    // yaw/pitch from central-difference segment tangents (smoothed y).
     const t = new THREE.Vector3();
     for (let i = 0; i < N; i++) {
       t.subVectors(this.pos[(i + 1) % N], this.pos[(i - 1 + N) % N]).normalize();
@@ -53,7 +95,13 @@ export class TrackV2 {
       this.pitch[i] = Math.asin(Math.max(-1, Math.min(1, t.y)));
     }
 
-    // Curvature -> bank (track.js formula).
+    // Curvature -> bank (track.js formula), then a second circular smoothing
+    // pass on the CLAMPED bank. The raw bank is derived from noisy XZ
+    // curvature and slams between the ±0.14 clamps (worst measured second
+    // difference: 0.2085 rad near the Amber Switchback), which renders as a
+    // hard crease across the road surface. Smoothing the clamped signal with
+    // a radius-5 box filter keeps intentional banking (same cap) while
+    // removing the crease.
     const ds = this.length / N;
     const curv = new Float64Array(N);
     for (let i = 0; i < N; i++) {
@@ -61,6 +109,7 @@ export class TrackV2 {
       const b = this.yaw[(i - 1 + N) % N];
       curv[i] = wrapAngle(a - b) / (2 * ds);
     }
+    const _rawBank = new Float64Array(N);
     for (let i = 0; i < N; i++) {
       let acc = 0;
       for (let k = -BANK_SMOOTH; k <= BANK_SMOOTH; k++) {
@@ -68,8 +117,38 @@ export class TrackV2 {
       }
       const c = acc / (2 * BANK_SMOOTH + 1);
       const raw = -Math.atan((BANK_REF_SPEED * BANK_REF_SPEED * c) / 9.81) * 0.7;
-      this.bank[i] = Math.max(-BANK_MAX, Math.min(BANK_MAX, raw));
+      _rawBank[i] = Math.max(-BANK_MAX, Math.min(BANK_MAX, raw));
     }
+    const _BR = 5; // bank smoothing radius (samples)
+    const _d2b0 = _d2(_rawBank);
+    let _maxCrease0 = 0;
+    for (let i = 0; i < N; i++) {
+      let acc = 0;
+      for (let k = -_BR; k <= _BR; k++) acc += _rawBank[(i + k + N) % N];
+      this.bank[i] = Math.max(-BANK_MAX, Math.min(BANK_MAX, acc / (2 * _BR + 1)));
+    }
+    const _d2b1 = _d2(this.bank);
+    // Cross-road surface crease estimate at the rail (|lat| = 11 m):
+    // |d2(bank)| * 11 is the worst lateral kink between adjacent samples.
+    let _maxCrease1 = 0;
+    for (let i = 0; i < N; i++) {
+      const d2 = Math.abs(this.bank[(i + 1) % N] - 2 * this.bank[i] + this.bank[(i - 1 + N) % N]);
+      if (d2 * 11 > _maxCrease1) _maxCrease1 = d2 * 11;
+      const d2r = Math.abs(_rawBank[(i + 1) % N] - 2 * _rawBank[i] + _rawBank[(i - 1 + N) % N]);
+      if (d2r * 11 > _maxCrease0) _maxCrease0 = d2r * 11;
+    }
+
+    // Smoothing report (read by the harness / physics-fix gate).
+    this.smoothStats = {
+      samples: N,
+      yMinBefore: _yMin0, yMaxBefore: _yMax0,
+      yMinAfter: _yMin1, yMaxAfter: _yMax1,
+      yMaxDelta: _maxDy, yRmsDelta: Math.sqrt(_sumSqDy / N),
+      yD2MaxBefore: _d2y0.max, yD2MaxAfter: _d2y1.max,
+      yD2MeanBefore: _d2y0.mean, yD2MeanAfter: _d2y1.mean,
+      bankD2MaxBefore: _d2b0.max, bankD2MaxAfter: _d2b1.max,
+      bankCrease11mBefore: _maxCrease0, bankCrease11mAfter: _maxCrease1,
+    };
 
     // Tunnel = section J from the plan; bridge = the plan's bridge
     // section_id resolved through the sections table.

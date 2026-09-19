@@ -3,94 +3,200 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<title>Tokyo Drift — Web Rebuild</title>
+<meta name="theme-color" content="#05070f">
+<title>Tokyo Drift 3D — Neon Night (M4)</title>
 <style>
-  html,body{margin:0;padding:0;height:100%;background:#050510;overflow:hidden;overscroll-behavior:none}
-  #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#050510}
-  #game{display:block;touch-action:none;-webkit-user-select:none;user-select:none}
-  .hud{position:fixed;pointer-events:none;font-family:ui-monospace,Menlo,Consolas,monospace;color:#fff;z-index:5}
-  #topbar{top:calc(8px + env(safe-area-inset-top));left:0;right:0;display:flex;justify-content:space-between;padding:0 14px;font-size:15px;font-weight:700;text-shadow:0 2px 4px #000}
-  #topbar .dim{opacity:.75;font-weight:400}
-  #nitrobar{bottom:calc(96px + env(safe-area-inset-bottom));left:14px;width:120px;height:10px;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.4);border-radius:5px;overflow:hidden}
-  #nitrofill{height:100%;width:0%;background:linear-gradient(90deg,#53B5F9,#9fe0ff)}
-  #hearts{bottom:calc(112px + env(safe-area-inset-bottom));left:14px;font-size:18px;letter-spacing:2px;text-shadow:0 2px 4px #000}
-  #msg{top:34%;left:0;right:0;text-align:center;font-size:64px;font-weight:900;letter-spacing:4px;text-shadow:0 4px 18px #000;display:none}
-  #submsg{top:calc(34% + 84px);left:0;right:0;text-align:center;font-size:20px;font-weight:700;text-shadow:0 2px 8px #000;display:none}
-  #banner{top:calc(60px + env(safe-area-inset-top));left:0;right:0;text-align:center;font-size:26px;font-weight:900;letter-spacing:8px;text-shadow:0 2px 12px #000;opacity:0;transition:opacity .4s}
-  #nitrobtn{position:fixed;right:18px;bottom:calc(90px + env(safe-area-inset-bottom));width:84px;height:84px;border-radius:50%;
-    background:radial-gradient(circle at 35% 30%,#9fe0ff,#1e6fd9 70%);border:3px solid rgba(255,255,255,.7);
-    color:#fff;font-family:inherit;font-weight:900;font-size:14px;z-index:6;display:none;touch-action:none;opacity:.45}
-  #nitrobtn:active{transform:scale(.93)}
-  #nitrobtn.ready{opacity:1;box-shadow:0 0 22px rgba(74,226,255,.9);animation:nitropulse 0.9s infinite alternate}
-  @keyframes nitropulse{from{box-shadow:0 0 12px rgba(74,226,255,.5)}to{box-shadow:0 0 30px rgba(74,226,255,1)}}
-  #devbtn, #scenebtn{pointer-events:auto;cursor:pointer;margin-top:14px;font-size:13px;font-weight:700;letter-spacing:2px;
-    padding:10px 26px;border:2px solid rgba(74,226,255,.6);border-radius:10px;color:#4ae2ff;background:rgba(74,226,255,.08)}
-  #devlog{justify-content:flex-start;padding:18px 14px;overflow-y:auto;-webkit-overflow-scrolling:touch}
-  #devlog .dhead{font-size:22px;letter-spacing:4px;color:#4ae2ff;margin:6px 0 2px;font-weight:900}
-  #devlog .dsub{font-size:11px;opacity:.6;margin-bottom:8px}
-  .dentry{text-align:left;width:100%;max-width:560px;border:1px solid rgba(255,255,255,.14);border-radius:10px;
-    padding:10px 12px;margin:8px 0;background:rgba(255,255,255,.04)}
-  .dentry .dv{font-size:13px;font-weight:900;color:#ffdd46;letter-spacing:1px}
-  .dentry .dt{font-size:12px;font-weight:700;color:#fff;margin:4px 0}
-  .dentry .dsec{font-size:10px;letter-spacing:2px;color:#4ae2ff;margin:8px 0 3px}
-  .dentry ul{margin:2px 0;padding-left:16px;font-size:11px;line-height:1.5;color:#dfe3ee}
-  .dentry .dshots{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
-  .dentry figure{margin:0;width:31%}
-  .dentry img{width:100%;border-radius:6px;border:1px solid rgba(255,255,255,.2);display:block}
-  .dentry figcaption{font-size:9px;opacity:.65;margin-top:2px;line-height:1.3}
-  #devclose{pointer-events:auto;cursor:pointer;margin:14px 0 26px;font-size:15px;font-weight:900;letter-spacing:3px;
-    padding:12px 40px;border:none;border-radius:10px;color:#fff;background:#1e6fd9}
-  .overlay{position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;align-items:center;justify-content:center;
-    background:rgba(5,5,16,.82);backdrop-filter:blur(3px);font-family:ui-monospace,Menlo,Consolas,monospace;color:#fff;text-align:center;padding:20px}
-  .overlay h1{font-size:42px;letter-spacing:6px;margin:0 0 6px;color:#ff2a5a;text-shadow:0 0 24px rgba(255,42,90,.6)}
-  .overlay h2{font-size:15px;letter-spacing:3px;opacity:.7;margin:0 0 22px;font-weight:400}
-  .sect{font-size:12px;letter-spacing:3px;opacity:.6;margin:16px 0 8px}
-  .opts{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;max-width:420px}
-  .opt{pointer-events:auto;cursor:pointer;border:2px solid rgba(255,255,255,.25);border-radius:10px;padding:10px 12px;font-size:13px;font-weight:700;background:rgba(255,255,255,.06)}
-  .opt.sel{border-color:#ff2a5a;background:rgba(255,42,90,.18);box-shadow:0 0 14px rgba(255,42,90,.35)}
-  .opt small{display:block;font-weight:400;opacity:.65;font-size:11px;margin-top:3px}
-  #startbtn{pointer-events:auto;cursor:pointer;margin-top:26px;font-size:20px;font-weight:900;letter-spacing:4px;
-    padding:16px 54px;border:none;border-radius:14px;color:#fff;background:linear-gradient(180deg,#ff2a5a,#b3123a);
-    box-shadow:0 6px 30px rgba(255,42,90,.5)}
-  #startbtn:active{transform:scale(.96)}
-  #finishstats{font-size:16px;line-height:2;margin:10px 0 0}
-  .hidden{display:none!important}
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { width:100%; height:100%; overflow:hidden; background:#05070f; touch-action:none;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:#fff; user-select:none; -webkit-user-select:none; }
+  #game { position:fixed; inset:0; }
+  #game canvas { display:block; width:100%; height:100%; }
+  /* Full-screen steering zone: left half = steer left, right half = steer right */
+  #touchzone { position:fixed; inset:0; z-index:5; touch-action:none; }
+  .hud { position:fixed; z-index:10; pointer-events:none; text-shadow:0 1px 6px rgba(0,0,0,.8); }
+  #topbar { top:calc(10px + env(safe-area-inset-top)); left:0; right:0; display:flex;
+    justify-content:center; gap:22px; font-size:15px; font-weight:600; letter-spacing:.06em; }
+  #topbar .lbl { display:block; font-size:10px; font-weight:400; opacity:.65; letter-spacing:.18em; text-align:center;}
+  #hud-lap { color:#7dff9e; }
+  #hud-lap.done { color:#ffd27a; }
+  #laptimebar { top:calc(52px + env(safe-area-inset-top)); left:0; right:0; text-align:center;
+    font-size:11px; opacity:.75; letter-spacing:.08em; }
+  #speedo { bottom:calc(118px + env(safe-area-inset-bottom)); left:0; right:0; text-align:center; }
+  #speedo .v { font-size:56px; font-weight:800; line-height:1; }
+  #speedo .u { font-size:13px; opacity:.7; letter-spacing:.2em; }
+  /* Nitro meter */
+  #nitro-meter { position:fixed; z-index:10; pointer-events:none;
+    bottom:calc(96px + env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%);
+    width:150px; height:8px; border-radius:4px; background:rgba(255,255,255,.14);
+    border:1px solid rgba(255,255,255,.25); overflow:hidden; }
+  #nitro-fill { height:100%; width:100%; border-radius:4px;
+    background:linear-gradient(90deg,#35f2ff,#7dff9e); transition:width .08s linear; }
+  #nitro-fill.burn { background:linear-gradient(90deg,#ff9f43,#ff5fa2); }
+  #nitro-lbl { position:fixed; z-index:10; pointer-events:none;
+    bottom:calc(106px + env(safe-area-inset-bottom)); left:0; right:0; text-align:center;
+    font-size:9px; letter-spacing:.28em; opacity:.6; }
+  /* Nitro button, bottom-right — one tap burns the whole meter */
+  #btn-nitro { position:fixed; z-index:20; right:18px; bottom:calc(18px + env(safe-area-inset-bottom));
+    width:92px; height:92px; border-radius:50%; border:2px solid rgba(53,242,255,.55);
+    background:rgba(10,30,40,.62); color:#35f2ff; font-size:13px; font-weight:800;
+    letter-spacing:.08em; display:flex; align-items:center; justify-content:center;
+    backdrop-filter:blur(4px); touch-action:none; text-shadow:0 0 12px rgba(53,242,255,.8); }
+  #btn-nitro.on { background:rgba(53,242,255,.45); color:#04121a; }
+  /* Pause button (top-right, small) + PAUSED pill */
+  #btn-pause { position:fixed; z-index:30; top:calc(8px + env(safe-area-inset-top)); right:10px;
+    width:38px; height:38px; border-radius:10px; border:1px solid rgba(255,255,255,.28);
+    background:rgba(8,12,22,.55); color:#fff; font-size:15px; line-height:1;
+    display:flex; align-items:center; justify-content:center; backdrop-filter:blur(4px);
+    touch-action:none; opacity:.9; cursor:pointer; }
+  #btn-pause:active { background:rgba(53,242,255,.35); }
+  /* Day/Night toggle (top-left, readable on phone) */
+  #daynight { position:fixed; z-index:30; top:calc(8px + env(safe-area-inset-top)); left:10px;
+    display:flex; gap:6px; }
+  #daynight button { height:38px; padding:0 14px; border-radius:10px;
+    border:1px solid rgba(255,255,255,.28); background:rgba(8,12,22,.55);
+    color:#fff; font-size:13px; font-weight:800; letter-spacing:.06em;
+    display:flex; align-items:center; justify-content:center; backdrop-filter:blur(4px);
+    touch-action:none; opacity:.85; cursor:pointer; }
+  #daynight button.on { background:rgba(53,242,255,.35); border-color:rgba(53,242,255,.7); opacity:1; }
+  #paused-pill { position:fixed; z-index:30; top:calc(56px + env(safe-area-inset-top)); left:50%;
+    transform:translateX(-50%); padding:5px 14px 5px 18px; border-radius:999px;
+    background:rgba(8,12,22,.72); border:1px solid rgba(255,255,255,.25);
+    font-size:11px; letter-spacing:.3em; font-weight:700; display:none; pointer-events:none; }
+  #paused-pill.show { display:block; }
+  /* 80s retro main menu — pure CSS art (procedural; not designer artwork).
+     The overlay is mostly transparent up top so the attract-mode 3D scene
+     (autopilot driving, front-low camera) shows through behind the title. */
+  #overlay { position:fixed; inset:0; z-index:50; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:10px; overflow:hidden;
+    background:linear-gradient(180deg, rgba(5,6,16,.10) 0%, rgba(5,6,16,.30) 42%,
+      rgba(10,4,22,.88) 78%, rgba(6,2,16,.94) 100%); }
+  /* CRT scanlines */
+  #overlay::after { content:""; position:absolute; inset:0; z-index:3; pointer-events:none;
+    background:repeating-linear-gradient(180deg, rgba(0,0,0,.14) 0 1px, transparent 1px 3px);
+    opacity:.45; }
+  /* synthwave sun with slats */
+  #menu-sun { position:absolute; z-index:0; top:7%; left:50%; transform:translateX(-50%);
+    width:min(58vw,280px); aspect-ratio:1/1; border-radius:50%; pointer-events:none;
+    background:linear-gradient(180deg,#ffd319 0%,#ff9e3d 32%,#ff2975 62%,#8c1eff 100%);
+    -webkit-mask-image:repeating-linear-gradient(180deg,#000 0 9px,transparent 9px 12px);
+    mask-image:repeating-linear-gradient(180deg,#000 0 9px,transparent 9px 12px);
+    opacity:.5; filter:blur(1px) drop-shadow(0 0 34px rgba(255,41,117,.55)); }
+  /* perspective grid floor */
+  #menu-grid { position:absolute; z-index:0; left:-30%; right:-30%; bottom:-6%; height:36%;
+    pointer-events:none; opacity:.4;
+    background:
+      linear-gradient(transparent calc(100% - 2px), rgba(53,242,255,.65) 100%),
+      linear-gradient(90deg, transparent calc(100% - 2px), rgba(255,95,162,.65) 100%);
+    background-size:46px 30px;
+    transform:perspective(340px) rotateX(64deg); transform-origin:bottom;
+    -webkit-mask-image:linear-gradient(180deg,transparent,#000 55%);
+    mask-image:linear-gradient(180deg,transparent,#000 55%); }
+  #overlay h1 { position:relative; z-index:2; font-family:"Arial Black","Helvetica Neue",Helvetica,Impact,sans-serif;
+    font-size:clamp(36px,10.5vw,62px); font-weight:900; letter-spacing:.05em; line-height:1.05;
+    text-align:center; transform:skewX(-6deg);
+    background:linear-gradient(180deg,#ff5fa2 0%,#ff9fd6 30%,#ffffff 48%,#7df9ff 58%,#2fc4ff 100%);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+    filter:drop-shadow(0 2px 0 rgba(24,2,44,.95)) drop-shadow(0 0 24px rgba(255,95,162,.45)); }
+  #menu-jp { position:relative; z-index:2; font-size:19px; letter-spacing:.55em; text-indent:.55em;
+    color:#ff8fc4; text-shadow:0 0 14px rgba(255,95,162,.85), 0 0 3px rgba(255,95,162,.9); font-weight:700; }
+  #menu-tag { position:relative; z-index:2; font-size:11px; letter-spacing:.32em; text-indent:.32em;
+    color:#7df9ff; opacity:.9; text-shadow:0 0 10px rgba(53,242,255,.7); font-weight:600; }
+  #overlay p { position:relative; z-index:2; font-size:12px; opacity:.78; text-align:center;
+    padding:0 26px; line-height:1.75; max-width:520px; margin-top:6px; }
+  #overlay .tap { position:relative; z-index:2; margin-top:12px; padding:15px 48px; border-radius:6px;
+    font-family:"Arial Black","Helvetica Neue",Helvetica,Arial,sans-serif; font-size:18px; font-weight:900;
+    letter-spacing:.14em; text-indent:.14em; color:#8ff7ff; background:rgba(8,10,28,.45);
+    border:2px solid #35f2ff; cursor:pointer;
+    text-shadow:0 0 12px rgba(53,242,255,.9);
+    box-shadow:0 0 20px rgba(53,242,255,.35), inset 0 0 14px rgba(53,242,255,.12), 4px 4px 0 rgba(255,95,162,.55);
+    animation:tapPulse 1.7s ease-in-out infinite; }
+  #overlay .tap:active { transform:translate(2px,2px);
+    box-shadow:0 0 20px rgba(53,242,255,.35), inset 0 0 14px rgba(53,242,255,.12), 2px 2px 0 rgba(255,95,162,.55); }
+  @keyframes tapPulse { 0%,100% { opacity:1; } 50% { opacity:.6; } }
+  #overlay .tap.secondary { font-size:14px; padding:12px 36px; margin-top:2px;
+    border-color:#ff5fa2; color:#ffc4dd;
+    box-shadow:0 0 20px rgba(255,95,162,.35), inset 0 0 14px rgba(255,95,162,.12), 4px 4px 0 rgba(53,242,255,.45); }
+  #menu-foot { position:relative; z-index:2; margin-top:14px; font-size:9px; letter-spacing:.24em;
+    text-indent:.24em; opacity:.45; }
+  /* Boot loading bar (QA fix 2026-09-19): visible while game assets load, so the
+     Start button is never tapped against a dead boot. Pure CSS art. */
+  #loading { position:relative; z-index:2; margin-top:14px; width:min(78vw,340px);
+    display:flex; flex-direction:column; gap:8px; align-items:stretch; }
+  #loadlabel { font-size:10px; letter-spacing:.22em; text-indent:.22em; text-align:center;
+    color:#7df9ff; opacity:.9; text-shadow:0 0 10px rgba(53,242,255,.7); font-weight:600;
+    min-height:14px; }
+  #loadlabel.err { color:#ff9090; text-shadow:0 0 10px rgba(255,80,80,.7); }
+  #loadbar { height:10px; border-radius:6px; background:rgba(255,255,255,.10);
+    border:1px solid rgba(53,242,255,.35); overflow:hidden; position:relative; }
+  #loadfill { height:100%; width:0%; border-radius:6px;
+    background:linear-gradient(90deg,#ff5fa2,#ff9fd6 45%,#35f2ff);
+    box-shadow:0 0 12px rgba(53,242,255,.55); transition:width .18s linear; }
+  /* indeterminate shimmer: animated sheen sweeping the track */
+  #loadbar.busy::after { content:""; position:absolute; inset:0;
+    background:linear-gradient(100deg,transparent 20%,rgba(53,242,255,.55) 50%,transparent 80%);
+    background-size:60% 100%; background-repeat:no-repeat;
+    animation:loadShimmer 1.1s linear infinite; }
+  @keyframes loadShimmer { from { background-position:-60% 0; } to { background-position:160% 0; } }
+  #overlay .tap.loading { opacity:.55; }
+  #overlay .tap.failed { border-color:#ff5f5f; color:#ffb3b3;
+    box-shadow:0 0 20px rgba(255,95,95,.35), inset 0 0 14px rgba(255,95,95,.12), 4px 4px 0 rgba(255,95,162,.45); }
+  #err { position:fixed; z-index:99; left:8px; bottom:8px; max-width:90vw; font-size:10px; color:#ff8080;
+    background:rgba(0,0,0,.7); padding:6px 8px; border-radius:6px; display:none; white-space:pre-wrap; }
 </style>
+<script type="importmap">
+{ "imports": {
+    "three": "./vendor/three.module.js",
+    "rapier": "./vendor/rapier.es.js"
+} }
+</script>
 </head>
 <body>
-<div id="wrap"><canvas id="game"></canvas></div>
+<div id="game"></div>
+<div id="touchzone"></div>
 
-<div class="overlay" id="title">
-  <h1>TOKYO DRIFT</h1>
-  <h2>NEON CITY &bull; 2 LAPS</h2>
-  <div class="sect">MACHINE</div>
-  <div class="opts" id="caropts"></div>
-  <div class="sect">TRACK</div>
-  <div class="opts" id="trackopts"></div>
-  <button id="startbtn">START RACE</button>
-  <button id="scenebtn" style="margin-top:10px" onclick="location.href='districts.html'">SCENES &#x1F3D9;&#xFE0F;</button>
-  <button id="devbtn" style="margin-top:10px">DEV LOG</button>
-  <div class="sect" style="margin-top:18px">STEER: HOLD LEFT / RIGHT HALF OF SCREEN</div>
+<div class="hud" id="topbar">
+  <div><span class="lbl">LAP</span><span id="hud-lap">LAP 1/3</span></div>
+  <div><span class="lbl">TIME</span><span id="hud-time">00:00</span></div>
+  <div><span class="lbl">DIST</span><span id="hud-dist">0.00 km</span></div>
 </div>
-<div class="overlay hidden" id="devlog"></div>
+<div class="hud" id="laptimebar"><span id="hud-laptime">LAP 00:00.0</span></div>
+<div class="hud" id="speedo"><div class="v" id="hud-speed">0</div><div class="u">KM/H</div></div>
+<div id="nitro-lbl">NITRO</div>
+<div id="nitro-meter"><div id="nitro-fill"></div></div>
 
-<div class="overlay hidden" id="finish">
-  <h1 id="finishpos">1ST</h1>
-  <h2>RACE FINISHED</h2>
-  <div id="finishstats"></div>
-  <button id="startbtn2" class="opt" style="pointer-events:auto;margin-top:26px;font-size:18px;padding:14px 44px;border:none">RACE AGAIN</button>
-</div>
+<div id="btn-nitro">NITRO</div>
 
-<div class="overlay hidden" id="gameover">
-  <h1>WRECKED</h1>
-  <h2>OUT OF HEARTS</h2>
-  <div id="gostats" style="font-size:16px;line-height:2;margin:10px 0 0"></div>
-  <button id="startbtn3" class="opt" style="pointer-events:auto;margin-top:26px;font-size:18px;padding:14px 44px;border:none">RETRY</button>
+<button id="btn-pause" aria-label="Pause">&#10074;&#10074;</button>
+<div id="paused-pill">PAUSED</div>
+<div id="daynight" role="group" aria-label="Day night toggle">
+  <button id="btn-day" aria-label="Day mode">&#9728;&#65039; DAY</button>
+  <button id="btn-night" class="on" aria-label="Night mode">&#127769; NIGHT</button>
 </div>
 
-<button id="nitrobtn">NITRO</button>
+<div id="overlay">
+  <div id="menu-sun" aria-hidden="true"></div>
+  <div id="menu-grid" aria-hidden="true"></div>
+  <h1>TOKYO DRIFT 3D</h1>
+  <div id="menu-jp">東京ドリフト</div>
+  <div id="menu-tag">NEON NIGHT &mdash; 3 LAPS &mdash; CLOSED CIRCUIT</div>
+  <p>Hold LEFT / RIGHT half of the screen to steer &mdash; the car accelerates on its own.<br>
+  TAP NITRO (or Space) to burn the whole meter &mdash; grab glowing bottles on the road to refill.<br>
+  Cross into oncoming lanes to dodge traffic.<br>
+  Keyboard: &#9664; &#9654; / A D to steer &middot; Space / Shift nitro &middot; P pause.</p>
+  <button class="tap loading" id="btn-start">LOADING&hellip;</button>
+  <button class="tap secondary" id="btn-scenes" onclick="location.href='districts.html'">SCENES 🏙️</button>
+  <button class="tap secondary" id="btn-inspect">WORLD INSPECTOR</button>
+  <div id="loading" role="status" aria-label="Loading game assets">
+    <div id="loadlabel">LOADING&hellip;</div>
+    <div id="loadbar" class="busy"><div id="loadfill"></div></div>
+  </div>
+  <div id="menu-foot">CSS-ONLY RETRO ART &mdash; NO DESIGNER ASSETS</div>
+</div>
+<div id="err"></div>
+<div id="v2badge" style="display:none;position:fixed;z-index:40;top:calc(8px + env(safe-area-inset-top));left:10px;padding:4px 10px;border-radius:6px;background:rgba(20,8,40,.72);border:1px solid #b46bff;color:#e6c8ff;font-size:10px;letter-spacing:.12em;font-weight:700;pointer-events:none;">V2 LAYOUT DEMO &mdash; massing + road truth, not final art</div>
+<script>if ((new URLSearchParams(location.search).get('world') || 'v2') !== 'classic') { document.getElementById('v2badge').style.display = 'block'; }</script>
 
-<script src="assets/changelog-data.js"></script>
-<script src="assets/game.js"></script>
+<script type="module" src="./src/main.js"></script>
 </body>
 </html>

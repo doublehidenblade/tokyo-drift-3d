@@ -14,10 +14,11 @@ import { CFG } from './config.js';
 import { mulberry32, makeGantryTexture, makeStartLineTexture } from './textures.js';
 import { buildTrafficCarMesh } from './car.js';
 import { buildBlenderAssets } from './blender_assets.js';
+import { buildRoadFurniture } from './road_furniture.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 
-export async function buildCityV2(scene, physics, track) {
+export async function buildCityV2(scene, physics, track, onProgress) {
   const L = track.length;
   const TUN = track.tunnel, BR = track.bridge;
   const BAY = {
@@ -137,7 +138,7 @@ export async function buildCityV2(scene, physics, track) {
   // computed synchronously, GLB bake streams in async behind the handle.
   // The world boots with procedural massing; Blender buildings/props pop
   // in as each model finishes. See src/blender_assets.js.
-  const blender = buildBlenderAssets(scene, track);
+  const blender = buildBlenderAssets(scene, track, onProgress);
 
   // ---------------------------------------------------------------- ground
   {
@@ -763,6 +764,10 @@ export async function buildCityV2(scene, physics, track) {
   // main.js awaits buildCity: the Blender GLB bake finishes before the
   // city object resolves, so boot/harness screenshots see the full world.
   await blender.ready;
+
+  // Road furniture (zebra, chevrons, arrows, guardrails) from the inspected plan.
+  if (onProgress) onProgress(-1, 0, 'PLACING ROAD FURNITURE');
+  const furnitureCounts = await buildRoadFurniture(scene, track);
 
   // Asset stats for the harness (parent wires window.__td3.cityStats()
   // to this). Placement counts from the Blender pack fill in as GLBs

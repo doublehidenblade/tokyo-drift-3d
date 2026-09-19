@@ -1,7 +1,11 @@
 // Rapier physics for Milestone 6: the player car is HEADING-DRIVEN in
 // world space. arcade.x/z is the source of truth and arcade.heading is an
-// absolute world yaw. Steering changes the heading; with zero steering
-// input the heading is untouched and the car drives straight along its own
+// absolute world yaw. Since the 2026-09-19 physics-fix the car carries a
+// VELOCITY VECTOR (arcade.vx/vz): steering yaws the body, lateral grip
+// bleeds off the slip angle, and the vendored pocket-racer sustained-drift
+// state machine (src/vendor/pocket-racer/) rotates the velocity independently
+// of the body when the driver holds steer at speed. With zero steering input
+// the heading is untouched and the car drives straight along its own
 // heading — road curvature has zero influence (the M5 track-space model
 // re-snapped the car to the spline every step, which is why it "followed
 // the road" hands-off; that model is gone).
@@ -9,6 +13,7 @@
 // arcade.s/lat are per-step DERIVED estimates (nearest track point) used
 // only by traffic AI, nitro bottles, lap counting, the HUD/camera, and the
 // autopilot — never to move the car.
+// arcade.speed is the scalar |v|, kept for HUD/telemetry/collision code.
 //
 // Guard rails: the world agent builds rail GEOMETRY + Rapier colliders via
 // the exported addStaticBox(..., 'rail') at the CFG.railLat spec (see
@@ -25,6 +30,9 @@
 // ghost window. Drivetrain stays arcade (no tire sim, no raycast vehicle).
 import { CFG } from './config.js';
 import { nearestTrackPoint, containmentBreach, respawnPlayer } from './respawn.js';
+// Vendored arcade drift + grip model (pocket-racer, MIT — see
+// src/vendor/pocket-racer/SOURCE.md). Pure 2D math: no cannon-es, no THREE.
+import { createDriftState, resetDriftState, stepArcadeCar, spinYawCap } from './vendor/pocket-racer/drift-model.js';
 
 function wrapAngle(a) {
   while (a > Math.PI) a -= 2 * Math.PI;
@@ -109,7 +117,10 @@ export async function createPhysics(RAPIER, track) {
   const arcade = {
     x: 0, z: 0,
     s: CFG.spawnS, lat: CFG.spawnLat,
-    speed: 0, heading: 0, // heading = absolute world yaw (rad)
+    speed: 0, heading: 0, // heading = absolute world yaw (rad); speed = |v|
+    vx: 0, vz: 0, // velocity VECTOR (world XZ). The drift model rotates this
+                  // independently of heading — the slip angle between them
+                  // is what makes drifting possible (vendored pocket-racer).
     steerVis: 0, nitro: 1, nitroBurning: false,
     steerHold: 0, // 0..1 progressive-steering ramp: authority grows the
                   // longer a steer input is held (ramps up over ~0.9 s,
@@ -118,6 +129,8 @@ export async function createPhysics(RAPIER, track) {
     lap: 1, raceT: 0, lapStartT: 0, lastLapT: null, bestLapT: null,
     raceDone: false, pickups: 0,
   };
+  // Vendored pocket-racer drift state (see src/vendor/pocket-racer/).
+  const driftSt = createDriftState();
   const facade = { arcade, track }; // for respawnPlayer
 
   // ---- Nitro bottles: fixed track-space spots, re-arm after 25 s ----
@@ -197,7 +210,9 @@ export async function createPhysics(RAPIER, track) {
   }
 
   // Mirror the arcade state onto the Rapier body (called every step and
-  // after respawns). Velocity follows the heading so contacts resolve.
+  // after respawns). Velocity follows the velocity VECTOR (not the heading:
+  // in a drift they differ by the slip angle) so contacts resolve along the
+  // true travel direction.
   function placeBody() {
     track.frameAt(arcade.s, _f);
     // Exact surface height: dense elevation table + banked lateral term.
@@ -209,11 +224,14 @@ export async function createPhysics(RAPIER, track) {
       z: arcade.z
     }, true);
     chassis.setRotation(yawQuat(arcade.heading), true);
-    chassis.setLinvel({
-      x: Math.sin(arcade.heading) * arcade.speed,
-      y: 0,
-      z: Math.cos(arcade.heading) * arcade.speed,
-    }, true);
+    chassis.setLinvel({ x: arcade.vx, y: 0, z: arcade.vz }, true);
+  }
+
+  // Scale the velocity vector, keeping arcade.speed (= |v|) in sync.
+  // Replaces the old scalar `arcade.speed *= k` scrubs everywhere.
+  function scaleSpeed(k) {
+    arcade.vx *= k; arcade.vz *= k;
+    arcade.speed = Math.hypot(arcade.vx, arcade.vz);
   }
 
   // Refresh the derived track-space estimate from the world position.
@@ -248,8 +266,6 @@ export async function createPhysics(RAPIER, track) {
     if (!(over > 0)) return; // also false when lat is NaN
     dbg.railSnaps++;
     const side = Math.sign(arcade.lat) || 1;
-    const rel = wrapAngle(arcade.heading - est.yaw);
-    const outward = Math.sin(rel) * side; // > 0: still driving into the rail
     track.frameAt(arcade.s, _f);
     // Decompose (car - centerline) into tangent + lateral parts; clamp
     // only the lateral part. Forward slide along the rail is preserved.
@@ -258,15 +274,24 @@ export async function createPhysics(RAPIER, track) {
     arcade.lat = side * CFG.maxLat;
     arcade.x = _f.pos.x + _f.lat.x * arcade.lat + _f.tan.x * tComp;
     arcade.z = _f.pos.z + _f.lat.z * arcade.lat + _f.tan.z * tComp;
-    if (outward > 0) {
+    // Vector model: "driving into the rail" is a VELOCITY test (in a drift
+    // the body heading points sideways while travel goes along the rail).
+    // Kill ONLY the outward velocity component so the car slides along the
+    // rail instead of being pinned; then scrub speed on fresh hits/grinds.
+    const _ll = Math.hypot(_f.lat.x, _f.lat.z) || 1;
+    const _ox = (_f.lat.x / _ll) * side, _oz = (_f.lat.z / _ll) * side;
+    const vOut = arcade.vx * _ox + arcade.vz * _oz; // > 0: into the rail
+    if (vOut > 0) { arcade.vx -= _ox * vOut; arcade.vz -= _oz * vOut; }
+    if (vOut > 0) {
       if (stepCount - lastBounceStep > 30) {
-        arcade.speed *= 0.82; // fresh hit
+        scaleSpeed(0.82); // fresh hit
         lastBounceStep = stepCount;
         railBounceStep = stepCount; // logical plane handled it; skip the collider double-scrub
       } else {
-        arcade.speed *= Math.max(0, 1 - 0.8 * lastDt); // grinding
+        scaleSpeed(Math.max(0, 1 - 0.8 * lastDt)); // grinding
       }
     }
+    arcade.speed = Math.hypot(arcade.vx, arcade.vz);
     if (lastRailSparkStep !== stepCount) {
       lastRailSparkStep = stepCount;
       emit('curb', arcade.x, est.roadY + 0.6, arcade.z);
@@ -282,6 +307,7 @@ export async function createPhysics(RAPIER, track) {
     const breach = containmentBreach(arcade.x, y, arcade.z);
     if (breach) {
       respawnPlayer(facade, breach);
+      resetDriftState(driftSt); // respawn kills any drift in progress
       placeBody();
       return;
     }
@@ -335,7 +361,7 @@ export async function createPhysics(RAPIER, track) {
       nx = _f.lat.x * sgn; nz = _f.lat.z * sgn; nrm = 1;
     }
     nx /= nrm; nz /= nrm;
-    const pvx = Math.sin(a.heading) * a.speed, pvz = Math.cos(a.heading) * a.speed;
+    const pvx = a.vx, pvz = a.vz; // velocity VECTOR (drift-aware)
     const ovx = _f.tan.x * oTanVel, ovz = _f.tan.z * oTanVel;
     const closing = (pvx - ovx) * nx + (pvz - ovz) * nz;
     const J = closing > 0 ? Math.min(closing * BUMP_K, BUMP_MAX) : BUMP_MIN_SEP;
@@ -346,7 +372,10 @@ export async function createPhysics(RAPIER, track) {
     const nT = nx * _f.tan.x + nz * _f.tan.z;
     const nL = nx * _f.lat.x + nz * _f.lat.z;
     const cap = a.nitroBurning ? CFG.nitroMaxSpeed : CFG.maxSpeed;
-    a.speed = Math.max(0, Math.min(cap, a.speed - nT * J * 0.5));
+    const sp0 = Math.hypot(a.vx, a.vz);
+    const sp1 = Math.max(0, Math.min(cap, sp0 - nT * J * 0.5));
+    if (sp0 > 1e-6) { const k = sp1 / sp0; a.vx *= k; a.vz *= k; }
+    a.speed = sp1;
 
     // Other car: shoved away along the normal (track space), then slowed.
     if (isTraffic) {
@@ -376,11 +405,9 @@ export async function createPhysics(RAPIER, track) {
       if (a.nitro <= 0) a.nitroBurning = false;
     }
     const cap = a.nitroBurning ? CFG.nitroMaxSpeed : CFG.maxSpeed;
-    const accel = a.nitroBurning ? CFG.nitroAccel : CFG.arcadeAccel;
-    if (racing && !a.raceDone) {
-      if (a.speed < cap) a.speed = Math.min(cap, a.speed + accel * dt);
-      else a.speed = Math.max(cap, a.speed - 6 * dt);
-    }
+    const throttle = racing && !a.raceDone; // auto-accelerate: no throttle key
+    const DR = CFG.drift;
+    let sp = Math.hypot(a.vx, a.vz);
 
     // --- M6 steering: absolute world heading ---
     // steerIn is screen-relative: +1 = toward screen-LEFT. Screen-left as
@@ -399,7 +426,12 @@ export async function createPhysics(RAPIER, track) {
     if (steerIn !== 0) a.steerHold = Math.min(1, a.steerHold + dt / 0.9);
     else a.steerHold = Math.max(0, a.steerHold - dt / 0.25);
     const steerRamp = 0.35 + 0.65 * a.steerHold;
-    if (a.speed > 0.5 && steerIn !== 0) {
+    // Normalized steering effort for the drift model (-1..1).
+    const steerNorm = Math.max(-1, Math.min(1, steerIn * steerRamp));
+    // While drifting the model owns the heading kinematically (it sets it
+    // from travel direction + slip angle), so player steering only feeds
+    // the drift angle build/release logic there.
+    if (sp > 0.5 && steerIn !== 0 && !driftSt.drifting) {
       track.frameAt(a.s, _f);
       let lx = _f.lat.x, lz = _f.lat.z;
       const ll = Math.hypot(lx, lz) || 1; lx /= ll; lz /= ll;
@@ -407,8 +439,13 @@ export async function createPhysics(RAPIER, track) {
       const sx = lx * sgn, sz = lz * sgn; // screen-left world direction
       const fx = Math.sin(a.heading), fz = Math.cos(a.heading);
       const turnSign = (fz * sx - fx * sz) >= 0 ? 1 : -1;
-      const t = Math.min(a.speed / CFG.maxSpeed, 1);
-      const yawRate = (CFG.steerYawLow + (CFG.steerYawHigh - CFG.steerYawLow) * t) * steerRamp;
+      const t = Math.min(sp / CFG.maxSpeed, 1);
+      let yawRate = (CFG.steerYawLow + (CFG.steerYawHigh - CFG.steerYawLow) * t) * steerRamp;
+      // Spin safety (vendored pocket-racer): the yaw rate the tires can
+      // support shrinks with speed, so a full-lock yank at 60 m/s can not
+      // spin the car — forgiving for keyboard input.
+      const yawCap = spinYawCap(DR, sp);
+      if (yawRate > yawCap) yawRate = yawCap;
       a.heading += steerIn * turnSign * yawRate * dt;
     }
     // Attract-mode assist (one-shot flag set by autopilot.js each update):
@@ -422,10 +459,44 @@ export async function createPhysics(RAPIER, track) {
     }
     a.steerVis += ((steerIn * CFG.maxSteer) - a.steerVis) * Math.min(1, 12 * dt);
 
-    // --- Integrate along the car's own heading (never re-snapped) ---
+    // --- Engine: auto-accelerate along the BODY heading. Grip (in the
+    // drift model below) pulls the velocity vector toward the heading, so
+    // the car tracks its nose with a natural slip angle. While drifting the
+    // engine is cut and the model holds speed with mild drag; nitro still
+    // pushes along the travel direction.
+    if (throttle) {
+      if (!driftSt.drifting) {
+        if (sp < cap) {
+          const accel = a.nitroBurning ? CFG.nitroAccel : CFG.arcadeAccel;
+          a.vx += Math.sin(a.heading) * accel * dt;
+          a.vz += Math.cos(a.heading) * accel * dt;
+          sp = Math.hypot(a.vx, a.vz);
+          if (sp > cap) { const k = cap / sp; a.vx *= k; a.vz *= k; sp = cap; }
+        } else if (sp > cap) {
+          const ns = Math.max(cap, sp - 6 * dt);
+          const k = ns / sp; a.vx *= k; a.vz *= k; sp = ns;
+        }
+      } else if (a.nitroBurning && sp > 1e-3) {
+        const ns = Math.min(cap, sp + CFG.nitroAccel * dt);
+        const k = ns / sp; a.vx *= k; a.vz *= k; sp = ns;
+      }
+    }
+
+    // --- Vendored drift + grip model (pocket-racer): rotates the velocity
+    // vector independently of the body on sustained steer at speed; scrubs
+    // lateral velocity otherwise. Sets a.heading kinematically while
+    // drifting (heading = travel direction + slip angle).
+    const dm = stepArcadeCar(driftSt, DR, {
+      vx: a.vx, vz: a.vz, heading: a.heading,
+      steerNorm, throttle, braking: false, dt,
+    });
+    a.vx = dm.vx; a.vz = dm.vz; a.heading = dm.heading;
+    a.speed = Math.hypot(a.vx, a.vz);
+
+    // --- Integrate in world space (never re-snapped) ---
     const prevS = a.s;
-    a.x += Math.sin(a.heading) * a.speed * dt;
-    a.z += Math.cos(a.heading) * a.speed * dt;
+    a.x += a.vx * dt;
+    a.z += a.vz * dt;
 
     containAndClamp();
 
@@ -527,17 +598,17 @@ export async function createPhysics(RAPIER, track) {
       if (playerHit && a.ghostT <= 0) {
         if (kind === 'traffic' || kind === 'rival') {
           carBump(other, kind);
-          a.speed *= kind === 'traffic' ? 0.75 : 0.8;
+          scaleSpeed(kind === 'traffic' ? 0.75 : 0.8);
         } else if (kind === 'rail') {
           // World-agent rail collider contact. The arcade rail-plane check
           // already handled the bounce this step in the aligned case (deduped
           // via railBounceStep); this path only bites when a collider sits
           // inside the logical plane — mild grind scrub, no positional yank,
           // and never a heading change (M6).
-          if (railBounceStep !== stepCount) a.speed *= (1 - 0.3 * lastDt);
+          if (railBounceStep !== stepCount) scaleSpeed(1 - 0.3 * lastDt);
         }
-        else if (kind === 'curb') a.speed *= 0.86;
-        else if (kind === 'building') a.speed *= 0.55;
+        else if (kind === 'curb') scaleSpeed(0.86);
+        else if (kind === 'building') scaleSpeed(0.55);
       }
       if (kind === 'rail') {
         if (lastRailSparkStep !== stepCount) {
@@ -578,6 +649,8 @@ export async function createPhysics(RAPIER, track) {
     arcade.lat = lat;
     arcade.heading = _f.yaw;
     arcade.speed = 0;
+    arcade.vx = 0; arcade.vz = 0; // velocity vector restarts at rest
+    resetDriftState(driftSt);
     arcade.steerVis = 0;
     arcade.steerHold = 0; // steering ramp restarts after a reposition
     // NOTE: teleport preserves the nitro meter (M4 contract) — only
@@ -632,6 +705,12 @@ export async function createPhysics(RAPIER, track) {
     arcade, bottles, track, addStaticBox, onContact, step, stepN, reset, teleportS,
     playerSpeed: () => arcade.speed,
     rawEvents: () => rawEventCount,
+    // Harness: vendored drift-model state (pocket-racer).
+    driftInfo: () => ({
+      drifting: driftSt.drifting,
+      angleDeg: +(driftSt.angle * 180 / Math.PI).toFixed(1),
+      charge: +driftSt.charge.toFixed(3),
+    }),
     // Harness diagnostics: rail-snap activations and s-estimate jumps.
     dbgCounters: () => ({ railSnaps: dbg.railSnaps, sJumps: dbg.sJumps }),
     // World-agent contract for rail colliders: build one static cuboid per

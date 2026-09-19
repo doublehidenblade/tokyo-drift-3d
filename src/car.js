@@ -160,11 +160,16 @@ function loadImageData(url) {
 
 // Boot-time preload. Must be awaited before buildCarMesh /
 // buildTrafficCarMesh (traffic is built inside buildCity).
-export async function preloadCarModels() {
+// onProgress(done, total, name) is optional — the boot loading bar.
+export async function preloadCarModels(onProgress) {
   if (templates.race) return;
   const loader = new GLTFLoader();
+  const names = Object.entries(MODEL_FILES);
+  const total = names.length + 1; // +1: colormap.png
   baseImageData = await loadImageData('assets/models/Textures/colormap.png');
-  for (const [name, file] of Object.entries(MODEL_FILES)) {
+  if (onProgress) onProgress(1, total, 'colormap');
+  let done = 1;
+  for (const [name, file] of names) {
     const gltf = await loader.loadAsync(`assets/models/${file}`);
     const scene = gltf.scene;
     // Bake the uniform scale into geometry + node translations. Guard
@@ -201,6 +206,8 @@ export async function preloadCarModels() {
     let baseMat = null;
     scene.traverse((o) => { if (o.isMesh && !baseMat) baseMat = o.material; });
     templates[name] = { scene, body, wheels, bbox, paintRefs, baseMat };
+    done++;
+    if (onProgress) onProgress(done, total, name);
   }
   // Recompute the shared wheel spots from the race template (player/rival).
   const rw = templates.race.wheels.map((w) => {

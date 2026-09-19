@@ -21,6 +21,54 @@ function reportError(msg) {
 window.addEventListener('error', (e) => reportError('error: ' + (e.message || e.type)));
 window.addEventListener('unhandledrejection', (e) => reportError('reject: ' + (e.reason && e.reason.message || e.reason)));
 
+// ---- Start-button reliability (QA fix 2026-09-19) ----
+// boot() loads ~65 GLBs plus a 2.8 MB physics WASM; on real networks that
+// takes tens of seconds, and the old code only bound #btn-start AFTER all
+// of it — taps during boot did nothing with zero feedback. The handler is
+// bound here, synchronously at module evaluation, so the button is NEVER
+// dead: taps while booting queue the start (which fires the moment boot
+// completes); taps after a failed boot offer a retry.
+let booted = false;
+let bootFailed = false;
+let startQueued = false;
+function setBootProgress(frac, label, indeterminate) {
+  const fill = document.getElementById('loadfill');
+  const bar = document.getElementById('loadbar');
+  const lab = document.getElementById('loadlabel');
+  if (fill) fill.style.width = `${Math.max(0, Math.min(1, frac)) * 100}%`;
+  if (bar) bar.classList.toggle('busy', !!indeterminate);
+  if (lab && label) lab.textContent = label;
+}
+function showBootError(msg) {
+  bootFailed = true;
+  const lab = document.getElementById('loadlabel');
+  if (lab) { lab.textContent = 'LOAD FAILED — ' + msg; lab.classList.add('err'); }
+  const bar = document.getElementById('loadbar');
+  if (bar) bar.classList.remove('busy');
+  const btn = document.getElementById('btn-start');
+  if (btn) { btn.classList.remove('loading'); btn.classList.add('failed'); btn.textContent = '\u27F3 TAP TO RETRY'; }
+}
+function finishBoot() {
+  booted = true;
+  const loading = document.getElementById('loading');
+  if (loading) loading.style.display = 'none';
+  const btn = document.getElementById('btn-start');
+  if (btn) { btn.classList.remove('loading'); btn.textContent = 'TAP TO START'; }
+  // A tap that landed mid-boot starts the race now — the button never "does nothing".
+  if (startQueued) { startQueued = false; resetGame(); }
+}
+// Module scripts run after the document is parsed, so the button exists here.
+document.getElementById('btn-start').addEventListener('click', () => {
+  if (bootFailed) { location.reload(); return; } // clean retry after a failed boot
+  if (!booted) {
+    startQueued = true;
+    const btn = document.getElementById('btn-start');
+    if (btn) btn.textContent = 'QUEUED \u2014 STARTING\u2026';
+    return;
+  }
+  resetGame();
+});
+
 let track, physics, renderer, scene, camera, playerMesh, rivalMesh, sparks, city, inspector;
 let state = 'menu';       // menu | playing
 let elapsed = 0;
@@ -49,28 +97,38 @@ function tunnelFactor(s) {
 }
 
 async function boot() {
-  await RAPIER.init();
+  // Stage timeout: if any await hangs (promise never settles), fail fast with
+  // a clear message instead of sitting on LOADING... forever.
+  const stage = (name, p, ms=45000) => Promise.race([
+    p,
+    new Promise((_, rej)=>setTimeout(()=>rej(new Error('STALLED: '+name+' ('+(ms/1000)+'s)')), ms)),
+  ]);
+  setBootProgress(0.02, 'STARTING PHYSICS ENGINE', true);
+  await stage('physics engine (RAPIER.init)', RAPIER.init());
   // Real car models (Kenney car-kit GLBs): preload before buildCity, which
   // builds traffic visuals, and before buildCarMesh (player/rival).
-  await preloadCarModels();
+  await stage('car models', preloadCarModels((done, total) =>
+    setBootProgress(0.04 + 0.12 * (done / total), `LOADING CAR MODELS ${done}/${total}`, false)));
   // World selection: ?world=classic restores the M6 track/city; the
   // default ('v2') loads the plan-driven v2 world (track_v2/city_v2).
+  setBootProgress(0.17, 'LOADING WORLD MODULES', true);
   const WORLD = new URLSearchParams(location.search).get('world') || 'v2';
   let Track, buildCity;
   if (WORLD === 'classic') {
-    ({ Track } = await import('./track.js'));
-    ({ buildCity } = await import('./city.js'));
+    ({ Track } = await stage('world module track.js', import('./track.js')));
+    ({ buildCity } = await stage('world module city.js', import('./city.js')));
   } else {
-    ({ TrackV2: Track } = await import('./track_v2.js'));
-    ({ buildCityV2: buildCity } = await import('./city_v2.js'));
+    ({ TrackV2: Track } = await stage('world module track_v2.js', import('./track_v2.js')));
+    ({ buildCityV2: buildCity } = await stage('world module city_v2.js', import('./city_v2.js')));
     // v2 spawn: the plan's start/finish (mid-straight, facing the tangent).
     // physics.reset()/teleportS read CFG.spawnS, so set it before
     // createPhysics runs its initial reset().
-    const { PLAN } = await import('./plan_v2.js');
+    const { PLAN } = await stage('world module plan_v2.js', import('./plan_v2.js'));
     CFG.spawnS = PLAN.start_finish.s_m;
   }
+  setBootProgress(0.20, 'BUILDING CITY', WORLD !== 'v2');
   track = new Track();
-  physics = await createPhysics(RAPIER, track);
+  physics = await stage('physics world (createPhysics)', createPhysics(RAPIER, track), 30000);
 
   renderer = new THREE.WebGLRenderer({
     antialias: true, powerPreference: 'high-performance', preserveDrawingBuffer: true,
@@ -82,7 +140,15 @@ async function boot() {
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 2000);
 
-  city = await buildCity(scene, physics, track); // async: loads Blender GLBs
+  city = await stage('city build (buildCity)', buildCity(scene, physics, track, (done, total, label) => {
+    // buildCityV2 reports per-model determinate progress for the Blender
+    // pack bake, and done<0 for indeterminate sub-stages (road furniture).
+    // The classic city.js build takes no progress callback — the bar then
+    // just holds the last stage until the build resolves.
+    if (done < 0) setBootProgress(0.90, label || 'BUILDING CITY', true);
+    else setBootProgress(0.20 + 0.70 * (done / total), `BUILDING CITY ${done}/${total}`, false);
+  }), 120000);
+  setBootProgress(0.93, 'FINALIZING', true);
   sparks = new Sparks(scene);
   physics.onContact((kind, x, y, z) => {
     sparkCount++;
@@ -127,7 +193,8 @@ async function boot() {
     if (e.code === 'KeyP' || e.code === 'Escape') { e.preventDefault(); togglePause(); }
   });
   window.addEventListener('resize', onResize);
-  document.getElementById('btn-start').addEventListener('click', resetGame);
+  // NOTE: #btn-start is bound at module top (see the Start-button
+  // reliability block) so taps during boot queue the start.
 
   syncMeshes();
   city.syncTraffic(physics.traffic);
@@ -229,7 +296,7 @@ async function boot() {
     // Harness: verify car width = 70% of lane width.
     checks: () => {
       const carW = CFG.chassisHalf.x * 2;
-      return { carW, laneW: CFG.laneW, ratio: carW / CFG.laneW, laps: CFG.laps, trackLen: track.length };
+      return { carW, laneW: CFG.laneW, ratio: carW / CFG.laneW, laps: CFG.laps, trackLen: track.length, smooth: track.smoothStats };
     },
     state: () => {
       const a = physics.arcade;
@@ -247,6 +314,8 @@ async function boot() {
         x: +t.x.toFixed(1), y: +t.y.toFixed(1), z: +t.z.toFixed(1),
         yaw: +a.heading.toFixed(3),
         heading: +a.heading.toFixed(3),
+        vx: +a.vx.toFixed(2), vz: +a.vz.toFixed(2), // velocity vector (drift-aware)
+        respawns: a.respawns,
         steerHold: +a.steerHold.toFixed(3),
         dayNight: window.__td3.dayNight,
         rivalS: +physics.rivalSt.s.toFixed(1),
@@ -254,6 +323,7 @@ async function boot() {
         sparks: sparkCount,
         rawEvents: physics.rawEvents(),
         tunnel: tunnelFactor(a.s),
+        drift: physics.driftInfo(),
       };
     },
     // Mean luminance (0..1) of the central screen region — used by the
@@ -460,6 +530,8 @@ async function boot() {
   }).catch((e) => reportError('autopilot: ' + (e && e.message || e)));
 
   requestAnimationFrame(loop);
+  setBootProgress(1, 'READY', false);
+  finishBoot();
 }
 
 function onResize() {
@@ -759,4 +831,8 @@ function loop() {
   }
 }
 
-boot().catch((e) => reportError('boot: ' + (e && e.message || e)));
+boot().catch((e) => {
+  const msg = (e && e.message) || String(e);
+  reportError('boot: ' + msg);
+  showBootError(msg.slice(0, 120));
+});

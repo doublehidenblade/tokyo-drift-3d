@@ -39,7 +39,8 @@ const GROUND_Y = -9; // the big v2 ground plane
 
 // ------------------------------------------------------------------ handle
 // Returned synchronously; the GLB bake streams in behind it.
-export function buildBlenderAssets(scene, track) {
+// onProgress(done, total, name) is optional — the boot loading bar.
+export function buildBlenderAssets(scene, track, onProgress) {
   const glowMats = []; // {mat, base}
   let glowFactor = 1, glowLive = false;
   const counts = {};
@@ -68,15 +69,51 @@ export function buildBlenderAssets(scene, track) {
       for (const e of cat) entries.push(e);
     const byName = new Map(entries.map((e) => [e.name, e]));
     console.log(`[blender] manifest: ${entries.length} models`);
-    const placements = computePlacements(track, byName);
+    // FLOOR-PLAN GATE: the world is generated FROM the inspected plan
+    // (src/plan_placements.json), not by recomputing placements here.
+    // The plan was validated by tools/floorplan/check.mjs before this build.
+    let placements;
+    try {
+      const pres = await fetch('src/plan_placements.json');
+      if (!pres.ok) throw new Error(`HTTP ${pres.status}`);
+      const plan = await pres.json();
+      placements = new Map();
+      const toPlacement = (item) => ({
+        x: item.x, y: item.y, z: item.z, yaw: item.yaw,
+        sx: item.sx, sy: item.sy, sz: item.sz,
+      });
+      for (const b of plan.buildings) {
+        if (b.asset === 'proc-massing') continue; // handled by city_v2
+        if (!placements.has(b.asset)) placements.set(b.asset, []);
+        placements.get(b.asset).push(toPlacement(b));
+      }
+      for (const s of plan.signs) {
+        if (!placements.has(s.asset)) placements.set(s.asset, []);
+        placements.get(s.asset).push(toPlacement(s));
+      }
+      for (const p of plan.props) {
+        if (p.asset.startsWith('proc-')) continue; // handled separately
+        if (!byName.has(p.asset)) continue;
+        if (!placements.has(p.asset)) placements.set(p.asset, []);
+        placements.get(p.asset).push(toPlacement(p));
+      }
+      console.log(`[blender] plan placements: ${plan.buildings.length} bldgs, ${plan.signs.length} signs, ${plan.props.length} props (inspected)`);
+    } catch (e) {
+      console.warn('[blender] plan_placements.json failed, falling back to computePlacements:', e.message);
+      placements = computePlacements(track, byName);
+    }
     buildTrafficLights(scene, track, glowMats, counts);
     const loader = new GLTFLoader();
+    const modelTotal = entries.length;
+    let baked = 0;
+    if (onProgress) onProgress(0, modelTotal, 'manifest');
     await Promise.all(entries.map((e) =>
       bakeAndPlace(loader, scene, e, placements.get(e.name), glowMats, counts, errors)
         .catch((err) => {
           errors.push(`${e.name}: ${err.message}`);
           console.warn(`[blender] ${e.name} failed:`, err.message);
         })
+        .then(() => { baked++; if (onProgress) onProgress(baked, modelTotal, e.name); })
     ));
     glowLive = true;
     setGlowMode(glowFactor);
@@ -156,7 +193,7 @@ function isGlow(mat) {
 // ------------------------------------------------------- placement tables
 // Deterministic (mulberry32). byName gives manifest footprints so heights
 // come from the pack, not hardcoded numbers.
-function computePlacements(track, byName) {
+export function computePlacements(track, byName) {
   const L = track.length;
   const TUN = track.tunnel, BR = track.bridge;
   const bayR = PLAN.bay.rect;
@@ -188,6 +225,9 @@ function computePlacements(track, byName) {
     }
     return null;
   };
+  // Facade-mounted signage: record shophouse/midrise placements so phase-3
+  // hanging kanban can hang on real facades (never floating).
+  const facadeBuildings = [];
   // Buildings always rest on something real: district pad, or the global
   // ground plane. The top is never buried below the road: keep >= 2 m of
   // facade above it.
@@ -205,8 +245,10 @@ function computePlacements(track, byName) {
   // road. Skips: tunnel interior, bridge deck, bay water. Authored scale.
   const TOWERS = ['bt-commercial-tower-1', 'bt-commercial-tower-1a', 'bt-commercial-tower-1b',
     'bt-commercial-tower-2', 'bt-commercial-tower-2a', 'bt-commercial-tower-2b', 'bt-corner-building'];
-  const SHOP = ['bt-shophouse-1', 'bt-shophouse-2', 'bt-midrise-1', 'bt-midrise-1a'];
-  const MID = ['bt-midrise-1', 'bt-midrise-1a', 'bt-midrise-2'];
+  const SHOP = ['bt-shophouse-1', 'bt-shophouse-2', 'bt-midrise-1', 'bt-midrise-1a',
+    'bt-shophouse-1b', 'bt-shophouse-2a', 'bt-shophouse-2b', 'bt-shophouse-3'];
+  const MID = ['bt-midrise-1', 'bt-midrise-1a', 'bt-midrise-2',
+    'bt-midrise-1b', 'bt-midrise-2a', 'bt-midrise-2b'];
   const IND = ['bt-midrise-2', 'bt-corner-building'];
   const poolFor = (secId) => ({
     A: SHOP, B: SHOP, C: MID, D: MID, F: MID,
@@ -222,15 +264,29 @@ function computePlacements(track, byName) {
       const name = pool[Math.floor(rnd() * pool.length)];
       const f = track.frameAt(s);
       const yaw = Math.atan2(-side * f.lat.x, -side * f.lat.z); // +Z faces the road
-      add(name, wp.x, buildingBaseY(wp.x, wp.z, wp.y, H(name)), wp.z, yaw + (rnd() - 0.5) * 0.15);
+      // Craig's scale spec: shophouses 10-15 m. The authored models are
+      // 7.65-8.65 m; scale 1.25x to hit ~9.6-10.8 m (fidelity-safe).
+      // (Phase-3 variant shophouses are already 11.65 m — no scaling.)
+      const sc = (/shophouse-[12]$/i.test(name)) ? 1.25 : 1;
+      const bmeta = byName.get(name);
+      const baseY = buildingBaseY(wp.x, wp.z, wp.y, H(name) * sc);
+      add(name, wp.x, baseY, wp.z, yaw + (rnd() - 0.5) * 0.15, sc);
+      if (/shophouse|midrise/i.test(name) && bmeta && bmeta.footprint) {
+        facadeBuildings.push({
+          x: wp.x, z: wp.z, yaw, s, baseY,
+          sec: sectionOf(s).id, side,
+          w: bmeta.footprint[0] * sc, d: bmeta.footprint[1] * sc,
+        });
+      }
     }
   }
 
   // ---------------------------------------------------------------- props
-  // Lamp posts: every 45 m, alternating sides, lat ±13.5 (skip tunnel).
+  // Lamp posts: every 25 m (FH6 density bar), alternating sides, lat ±13.5
+  // (skip tunnel interior — it has its own strip/point lighting).
   // The arm (local +X) is flipped toward the road per side.
   let lside = 1;
-  for (let s = 20; s < L; s += 45) {
+  for (let s = 20; s < L; s += 25) {
     if (inTun(s, 15)) { lside = -lside; continue; }
     const wp = track.toWorld(s, lside * 13.5, 0);
     add('bt-lamp-post', wp.x, wp.y - 0.05, wp.z,
@@ -282,8 +338,10 @@ function computePlacements(track, byName) {
   }
 
   // ----------------------------------------------------------------- trees
-  // Street trees: every 35 m through START PLAZA + HARBOR WEST, lat ±15.
-  for (let s = 30; s < 1336; s += 35) {
+  // Street trees: every 30 m lining the avenues along the FULL circuit
+  // (FH6: trees lining avenues), both sides, lat ±15. Skip tunnel/bridge.
+  for (let s = 30; s < L - 10; s += 30) {
+    if (inTun(s, 20) || inBr(s, 20)) continue;
     for (const sd of [-1, 1]) {
       const wp = track.toWorld(s, sd * 15, 0);
       add('bt-tree-street', wp.x, wp.y - 0.05, wp.z, rnd() * Math.PI * 2, 0.85 + rnd() * 0.3);
@@ -314,6 +372,111 @@ function computePlacements(track, byName) {
       }
     }
     console.log(`[blender] sakura models in manifest: ${sakura.join(', ')}`);
+  }
+
+  // ------------------------------------------------- phase-3 fold-in
+  // New Blender assets from the final phase-3 batch. Manifest-driven:
+  // every asset here is looked up in byName, so missing models are
+  // skipped silently (add() no-ops when the model isn't in the pack).
+
+  // Hero buildings: 3 landmark GLBs in DOWNTOWN (sections G–I).
+  for (const [i, spec] of [
+    ['bt-hero-clocktower', 3520, 34], ['bt-hero-neonwrap', 3860, -36],
+    ['bt-hero-gatetower', 4210, 38],
+  ].entries()) {
+    const [name, sB, lat] = spec;
+    const wp = track.toWorld(sB, lat, 0);
+    if (inBay(wp.x, wp.z, 15)) continue;
+    const f = track.frameAt(sB);
+    const yaw = Math.atan2(-Math.sign(lat) * f.lat.x, -Math.sign(lat) * f.lat.z);
+    add(name, wp.x, buildingBaseY(wp.x, wp.z, wp.y, H(name)), wp.z, yaw);
+  }
+
+  // Hanging kanban signboards: facade-mounted on shophouse/midrise
+  // facades in the commercial streets (A, B, G, H, I). The sign hangs
+  // perpendicular off the road-facing facade — never floating, never
+  // independent of its building. Cap ~1 per 2nd building.
+  const HANG = ['bt-sign-hanging-1', 'bt-sign-hanging-2', 'bt-sign-hanging-3'];
+  let hangCount = 0;
+  facadeBuildings.forEach((b, i) => {
+    if (!['A', 'B', 'G', 'H', 'I'].includes(b.sec)) return;
+    if (i % 2 !== 0 || hangCount >= 48) return;
+    const name = HANG[hangCount % HANG.length];
+    // Facade point: building center + road-facing dir * (depth/2 + 0.4).
+    // Building +Z faces the road, so road-facing dir = (sin yaw, cos yaw).
+    const fx = b.x + Math.sin(b.yaw) * (b.d / 2 + 0.4);
+    const fz = b.z + Math.cos(b.yaw) * (b.d / 2 + 0.4);
+    // Sign projects perpendicular from the facade; drivers see it face-on.
+    const syaw = b.yaw + (hangCount % 2 === 0 ? Math.PI / 2 : -Math.PI / 2);
+    add(name, fx, b.baseY + 3.2, fz, syaw, 1);
+    hangCount++;
+  });
+
+  // Sidewalk railings: downtown sidewalks (G–I), lat ±13.2, every 8 m.
+  for (let s = 3360; s < 4370; s += 8) {
+    if (inTun(s, 15)) continue;
+    const yaw = yawFromTan(track.frameAt(s).tan);
+    for (const sd of [-1, 1]) {
+      const wp = track.toWorld(s, sd * 13.2, 0);
+      add('bt-sidewalk-railing-4m', wp.x, wp.y + 0.28, wp.z, yaw);
+    }
+  }
+
+  // Expressway gantry signs: S/F straight, tunnel approach, bridge approach.
+  for (const sB of [PLAN.start_finish.s_m, TUN.s0 - 60, BR.s0 - 60]) {
+    const f = track.frameAt(sB);
+    const cp = track.toWorld(sB, 0, 0);
+    add('bt-gantry-sign', cp.x, cp.y - 0.05, cp.z, yawFromTan(f.tan));
+  }
+
+  // Chochin lanterns: shotengai shopping streets (A, B), lat ±16.5.
+  const LANTERNS = ['bt-lantern-chochin-1', 'bt-lantern-chochin-2'];
+  for (let s = 60; s < 1336; s += 40) {
+    if (inTun(s, 15)) continue;
+    const yaw = yawFromTan(track.frameAt(s).tan);
+    for (const sd of [-1, 1]) {
+      const wp = track.toWorld(s, sd * 16.5, 0);
+      add(LANTERNS[Math.floor(rnd() * LANTERNS.length)],
+        wp.x, wp.y - 0.05, wp.z, yaw + (rnd() - 0.5) * 0.3);
+    }
+  }
+
+  // Cable-stayed bridge treatment: pylon pair + cable fans at midspan.
+  {
+    const sB = (BR.s0 + BR.s1) / 2;
+    const f = track.frameAt(sB);
+    const alongYaw = yawFromTan(f.tan) + Math.PI / 2; // fan's long axis along the bridge
+    for (const sd of [-1, 1]) {
+      const wp = track.toWorld(sB, sd * 8, 0);
+      add('bt-bridge-pylon', wp.x, wp.y - 0.1, wp.z, yawFromTan(f.tan));
+      add('bt-bridge-cable-fan', wp.x, wp.y - 0.1, wp.z, alongYaw);
+    }
+  }
+
+  // Pedestrians: downtown sidewalks (G–I), lat ±13.8, every 60 m.
+  const PEDS = ['bt-ped-1', 'bt-ped-2', 'bt-ped-3', 'bt-ped-4'];
+  for (let s = 3370; s < 4360; s += 60) {
+    if (inTun(s, 15)) continue;
+    const yaw = yawFromTan(track.frameAt(s).tan);
+    for (const sd of [-1, 1]) {
+      const wp = track.toWorld(s + (rnd() - 0.5) * 8, sd * 13.8, 0);
+      add(PEDS[Math.floor(rnd() * PEDS.length)],
+        wp.x, wp.y + 0.28, wp.z, rnd() * Math.PI * 2);
+    }
+  }
+
+  // Parked civilian vehicles: off-road pockets near buildings,
+  // lat ±(18–22), commercial + start-plaza sections, every 90 m.
+  const CARS = ['bt-car-sedan', 'bt-car-taxi', 'bt-car-van', 'bt-truck-box'];
+  for (let s = 80; s < L - 40; s += 90) {
+    if (inTun(s, 30) || inBr(s, 30)) continue;
+    const sec = sectionOf(s).id;
+    if (!['A', 'B', 'G', 'H', 'I'].includes(sec)) continue;
+    const sd = rnd() < 0.5 ? -1 : 1;
+    const wp = track.toWorld(s + (rnd() - 0.5) * 20, sd * (18 + rnd() * 4), 0);
+    if (inBay(wp.x, wp.z, 8)) continue;
+    add(CARS[Math.floor(rnd() * CARS.length)],
+      wp.x, wp.y - 0.05, wp.z, yawFromTan(track.frameAt(s).tan) + (rnd() < 0.1 ? Math.PI : 0));
   }
 
   return P;

@@ -73,6 +73,8 @@ export function respawnPlayer(phys, reason) {
   a.lat = 0;
   a.heading = _f.yaw;      // aligned to the track tangent
   a.speed = CFG.respawnSpeed;
+  a.vx = Math.sin(a.heading) * a.speed; // velocity vector follows the scalar
+  a.vz = Math.cos(a.heading) * a.speed;
   a.ghostT = CFG.ghostTime;
   a.respawns = (a.respawns || 0) + 1;
   a.lastGoodS = s;
