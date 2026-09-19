@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Downtown — Neon Tower Core · 3D Diorama</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:#05070c;overflow:hidden}
+  #view{display:block;width:100vw;height:100vh;cursor:grab;touch-action:none}
+  #view:active{cursor:grabbing}
+  #hud{position:fixed;top:12px;left:14px;color:#fff;font:13px/1.5 system-ui,sans-serif;
+    text-shadow:0 1px 4px #000;pointer-events:none;z-index:5}
+  #hud b{font-size:15px;letter-spacing:.5px}
+  #bar{position:fixed;top:12px;right:14px;z-index:6;display:flex;gap:8px}
+  #bar button{background:rgba(20,24,32,.85);color:#fff;border:1px solid #3a4356;border-radius:8px;
+    padding:9px 14px;font-size:13px;cursor:pointer}
+  #bar button.on{background:#1c3a5e;border-color:#58a6ff}
+  #status{position:fixed;bottom:12px;left:14px;color:#9aa4b5;font:12px system-ui,sans-serif;
+    text-shadow:0 1px 3px #000;z-index:5}
+  #hint{position:fixed;bottom:12px;right:14px;color:#9aa4b5;font:12px system-ui,sans-serif;z-index:5}
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="hud"><b>Downtown — neon tower core</b><br><span id="sub">static scene · orbit showroom</span></div>
+<div id="bar">
+  <button id="btn-day">☀ Day</button>
+  <button id="btn-night" class="on">🌙 Night</button>
+  <button id="btn-cam">📷 Street view</button>
+</div>
+<div id="status">loading…</div>
+<div id="hint">drag to orbit · scroll to zoom</div>
+
+<script type="module">
+import * as THREE from './vendor/three.module.js';
+
+const statusEl = document.getElementById('status');
+const canvas = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+// Neutral preserves shadow detail far better than ACES for night scenes —
+// ACES crushed the street/facades to pure black (the "void" look).
+renderer.toneMapping = THREE.NeutralToneMapping;
+renderer.toneMappingExposure = 1.35;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x05070e);
+scene.fog = new THREE.Fog(0x05070e, 70, 260);
+
+const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 900);
+
+// ---------- seeded prng ----------
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+function shade(hex,f){const n=parseInt(hex.slice(1),16);const r=Math.min(255,((n>>16)&255)*f)|0,g=Math.min(255,((n>>8)&255)*f)|0,b=Math.min(255,(n&255)*f)|0;return `rgb(${r},${g},${b})`;}
+
+// ---------- canvas helpers ----------
+const CJK = '"Noto Sans CJK JP","Noto Sans CJK",sans-serif';
+function cnv(w,h){ const c=document.createElement('canvas'); c.width=w; c.height=h; return [c, c.getContext('2d')]; }
+function tex(c, srgb=true){ const t=new THREE.CanvasTexture(c); if(srgb) t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=8; return t; }
+// vertical Japanese text block (chars stacked top -> bottom), centered at (cx,cy)
+function vText(g, text, cx, cy, fs, color, dy=1.04){
+  g.save(); g.fillStyle=color; g.textAlign='center'; g.textBaseline='middle';
+  g.font=`900 ${fs}px ${CJK}`;
+  const ch=[...text];
+  ch.forEach((c,i)=> g.fillText(c, cx, cy+(i-(ch.length-1)/2)*fs*dy));
+  g.restore();
+}
+// --- tate-kanban / wall-board texture: REAL Japanese text only ---
+function signTexture(o){
+  const w=o.w||256, h=o.h||1024;
+  const [c,g]=cnv(w,h);
+  const grad=g.createLinearGradient(0,0,o.vertical?w:0,o.vertical?0:h);
+  grad.addColorStop(0,shade(o.bg,1.18)); grad.addColorStop(0.5,shade(o.bg,0.95)); grad.addColorStop(1,shade(o.bg,0.62));
+  g.fillStyle=grad; g.fillRect(0,0,w,h);
+  const sheen=g.createLinearGradient(0,0,w,0);
+  sheen.addColorStop(0,'rgba(255,255,255,0)'); sheen.addColorStop(0.5,'rgba(255,255,255,0.10)'); sheen.addColorStop(1,'rgba(255,255,255,0)');
+  g.fillStyle=sheen; g.fillRect(0,0,w,h);
+  if(o.frame!==false){
+    g.strokeStyle=o.fg; g.lineWidth=Math.max(4,w*0.028);
+    g.strokeRect(g.lineWidth*0.9, g.lineWidth*0.9, w-1.8*g.lineWidth, h-1.8*g.lineWidth);
+  }
+  if(o.vertical){
+    const n=[...o.text].length;
+    const fs=Math.min(w*0.62, (h*0.86)/(n*1.04));
+    vText(g,o.text,w/2,h/2,fs,o.fg);
+    if(o.sub){ g.fillStyle=o.fg; g.textAlign='center'; g.font=`700 ${w*0.13}px ${CJK}`;
+      g.fillText(o.sub, w/2, h*0.94); }
+  } else {
+    const n=[...o.text].length;
+    const fs=Math.min(h*0.50, (w*0.88)/(n*0.98));
+    g.fillStyle=o.fg; g.textAlign='center'; g.textBaseline='middle';
+    g.font=`900 ${fs}px ${CJK}`;
+    g.fillText(o.text, w/2, h*(o.sub?0.40:0.52));
+    if(o.sub){ g.font=`700 ${h*0.20}px ${CJK}`; g.fillText(o.sub, w/2, h*0.72); }
+  }
+  const vg=g.createRadialGradient(w/2,h/2,Math.min(w,h)*0.35,w/2,h/2,Math.max(w,h)*0.72);
+  vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(0,0,0,0.20)');
+  g.fillStyle=vg; g.fillRect(0,0,w,h);
+  return tex(c);
+}
+// --- storefront fascia texture (horizontal, real Japanese) ---
+function fasciaTexture(name, sub, bg, fg){
+  const [c,g]=cnv(1024,192);
+  const grad=g.createLinearGradient(0,0,0,192);
+  grad.addColorStop(0,shade(bg,1.22)); grad.addColorStop(0.55,shade(bg,0.95)); grad.addColorStop(1,shade(bg,0.6));
+  g.fillStyle=grad; g.fillRect(0,0,1024,192);
+  g.strokeStyle=fg; g.lineWidth=7; g.strokeRect(10,10,1004,172);
+  const n=[...name].length;
+  const fs=Math.min(118, 930/(n*0.98));
+  g.fillStyle=fg; g.textAlign='center'; g.textBaseline='middle';
+  g.font=`900 ${fs}px ${CJK}`;
+  g.fillText(name, 512, sub?82:96);
+  if(sub){ g.font=`700 44px ${CJK}`; g.fillText(sub, 512, 150); }
+  return tex(c);
+}
+// --- warm interior glow behind shop glass (shelves/counter hint, abstract) ---
+function interiorTexture(seed, warm='#ffca7a'){
+  const rnd=mulberry32(seed);
+  const [c,g]=cnv(512,256);
+  const grad=g.createLinearGradient(0,0,0,256);
+  grad.addColorStop(0,shade(warm,1.0)); grad.addColorStop(0.6,shade(warm,0.72)); grad.addColorStop(1,shade(warm,0.45));
+  g.fillStyle=grad; g.fillRect(0,0,512,256);
+  g.fillStyle='rgba(40,22,10,0.42)';
+  for(let s=0;s<3;s++){
+    const y=70+s*58;
+    g.fillRect(0,y,512,10);
+    for(let x=8;x<500;x+=18+rnd()*22){
+      const hw=8+rnd()*14, hh=18+rnd()*26;
+      g.fillRect(x,y-hh,hw,hh);
+    }
+  }
+  g.fillStyle='rgba(30,16,8,0.5)'; g.fillRect(0,214,512,42);
+  return tex(c);
+}
+// --- tower facade texture: DENSE lit-window grid (Akira-grade) ---
+// o: {w, h, stories, tint, seed, lit}
+function facadeTexture(o){
+  const rnd=mulberry32(o.seed);
+  const W=512, rowH=96, H=o.stories*rowH;
+  const [c,g]=cnv(W,H);
+  g.fillStyle=o.tint; g.fillRect(0,0,W,H);
+  g.strokeStyle='rgba(0,0,0,0.35)'; g.lineWidth=3;
+  for(let s=0;s<=o.stories;s++){ g.beginPath(); g.moveTo(0,s*rowH); g.lineTo(W,s*rowH); g.stroke(); }
+  const cols=Math.max(4, Math.round(o.w/2.6));   // dense column count for towers
+  for(let s=0;s<o.stories;s++){
+    for(let i=0;i<cols;i++){
+      const wx=10+i*(W-20)/cols, ww=(W-20)/cols-12, wy=s*rowH+22, wh=rowH-44;
+      const lit=rnd()<o.lit;
+      if(lit){
+        const r=rnd();
+        // warm amber + cool white mix, a few teal accent floors
+        g.fillStyle= r<0.62? `rgba(255,${186+rnd()*40|0},${110+rnd()*30|0},0.95)`
+                  : r<0.9 ? `rgba(${190+rnd()*40|0},${215+rnd()*30|0},255,0.9)`
+                  :         `rgba(${120+rnd()*30|0},${225+rnd()*25|0},${205+rnd()*25|0},0.9)`;
+      } else {
+        g.fillStyle='rgba(10,14,22,0.92)';
+      }
+      g.fillRect(wx,wy,ww,wh);
+      g.strokeStyle='rgba(0,0,0,0.6)'; g.lineWidth=3; g.strokeRect(wx,wy,ww,wh);
+      g.strokeStyle='rgba(10,12,16,0.85)'; g.lineWidth=2.5;
+      g.beginPath(); g.moveTo(wx+ww/2,wy); g.lineTo(wx+ww/2,wy+wh); g.stroke();
+      g.beginPath(); g.moveTo(wx,wy+wh/2); g.lineTo(wx+ww,wy+wh/2); g.stroke();
+      if(lit){ g.fillStyle='rgba(0,0,0,0.25)'; g.fillRect(wx,wy+wh*0.55,ww,wh*0.45); }
+    }
+  }
+  return tex(c);
+}
+// --- road texture: wet asphalt + markings ---
+function roadTexture(){
+  const W=512, L=2048;
+  const [c,g]=cnv(W,L);
+  const rnd=mulberry32(99);
+  g.fillStyle='#171a21'; g.fillRect(0,0,W,L);
+  for(let i=0;i<9000;i++){
+    const v=rnd();
+    g.fillStyle=`rgba(${30+v*40|0},${32+v*42|0},${38+v*48|0},${0.22+rnd()*0.25})`;
+    g.fillRect(rnd()*W, rnd()*L, 1.6, 1.6);
+  }
+  const zToY=z=>(14-z)/130*L;
+  g.fillStyle='rgba(220,225,235,0.75)';
+  g.fillRect(14,0,5,L); g.fillRect(W-19,0,5,L);
+  g.fillStyle='rgba(230,235,245,0.8)';
+  for(let z=10;z>-112;z-=6){
+    g.fillRect(W/2-26, zToY(z), 5, 26);
+    g.fillRect(W/2+21, zToY(z), 5, 26);
+  }
+  g.fillRect(W/2-3, 0, 6, L);
+  g.fillStyle='rgba(225,230,240,0.85)';
+  for(let x=-6;x<6;x+=1.6) g.fillRect((x+7)/14*W, zToY(-4.5), 1.1/14*W, 3/130*L);
+  return tex(c);
+}
+// --- concrete sidewalk ---
+function concreteTexture(){
+  const [c,g]=cnv(256,1024); const rnd=mulberry32(7);
+  g.fillStyle='#2e323b'; g.fillRect(0,0,256,1024);
+  for(let i=0;i<2600;i++){ const v=rnd(); g.fillStyle=`rgba(${40+v*24|0},${42+v*24|0},${48+v*26|0},0.25)`; g.fillRect(rnd()*256,rnd()*1024,2,2); }
+  g.strokeStyle='rgba(0,0,0,0.5)'; g.lineWidth=3;
+  for(let y=0;y<1024;y+=128){ g.beginPath(); g.moveTo(0,y); g.lineTo(256,y); g.stroke(); }
+  const t=tex(c); t.wrapS=t.wrapT=THREE.RepeatWrapping; return t;
+}
+// --- wet-reflection streak (additive) ---
+function streakTexture(){
+  const [c,g]=cnv(64,256);
+  const grad=g.createLinearGradient(0,0,0,256);
+  grad.addColorStop(0,'rgba(255,255,255,0.9)'); grad.addColorStop(1,'rgba(255,255,255,0)');
+  g.fillStyle=grad; g.fillRect(0,0,64,256);
+  const img=g.getImageData(0,0,64,256), d=img.data;
+  for(let y=0;y<256;y++) for(let x=0;x<64;x++){
+    const f=Math.sin(Math.PI*x/64);
+    d[(y*64+x)*4+3]*=f*f;
+  }
+  g.putImageData(img,0,0);
+  return tex(c,false);
+}
+const streakTex = streakTexture();
+// --- sign light-bleed decal (fake GI wash from a lit sign onto the nearby facade) ---
+const bleedTex = (()=>{
+  const [c,g]=cnv(128,128);
+  const grad=g.createRadialGradient(64,64,4,64,64,64);
+  grad.addColorStop(0,'rgba(255,255,255,1)');
+  grad.addColorStop(0.45,'rgba(255,255,255,0.38)');
+  grad.addColorStop(1,'rgba(255,255,255,0)');
+  g.fillStyle=grad; g.fillRect(0,0,128,128);
+  return tex(c,false);
+})();
+function addBleed(x,y,z,dir,w,h,color,opacity){
+  const m=new THREE.MeshBasicMaterial({ map:bleedTex, color, transparent:true, opacity,
+    blending:THREE.AdditiveBlending, depthWrite:false });
+  regDimBasic(m);
+  const p=new THREE.Mesh(new THREE.PlaneGeometry(w,h), m);
+  p.position.set(x,y,z);
+  p.rotation.y=dir>0? Math.PI/2 : -Math.PI/2;
+  scene.add(p);
+}
+function addStreak(x, z, len, color, opacity, width=2.0, y=0.06){
+  const sm=new THREE.MeshBasicMaterial({ map:streakTex, color, transparent:true, opacity,
+    blending:THREE.AdditiveBlending, depthWrite:false });
+  regDimBasic(sm);
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(width,len), sm);
+  m.rotation.x=-Math.PI/2; m.rotation.z=Math.PI;
+  m.position.set(x,y,z+len/2-0.5);
+  scene.add(m);
+}
+// --- sky: deep blue + Akira orange/teal horizon grading ---
+function skyTexture(night){
+  const [c,g]=cnv(1024,512);
+  const grad=g.createLinearGradient(0,0,0,512);
+  if(night){
+    grad.addColorStop(0,'#01020a'); grad.addColorStop(0.40,'#0a1226');
+    grad.addColorStop(0.58,'#14304a'); grad.addColorStop(0.64,'#1f6a6a');
+    grad.addColorStop(0.68,'#c86a2a'); grad.addColorStop(0.71,'#5a2a24');
+    grad.addColorStop(0.74,'#0a0c16'); grad.addColorStop(1,'#05070c');
+  } else {
+    grad.addColorStop(0,'#3f7fd0'); grad.addColorStop(0.6,'#9cc6ee');
+    grad.addColorStop(0.72,'#e8d9b8'); grad.addColorStop(1,'#b8c4cc');
+  }
+  g.fillStyle=grad; g.fillRect(0,0,1024,512);
+  const rnd=mulberry32(21);
+  if(night){
+    for(let i=0;i<380;i++){
+      const y=rnd()*300, x=rnd()*1024;
+      g.fillStyle=`rgba(255,255,255,${0.25+rnd()*0.6})`;
+      g.fillRect(x,y,rnd()<0.12?2:1,rnd()<0.12?2:1);
+    }
+  } else {
+    g.fillStyle='rgba(255,255,255,0.5)';
+    for(let i=0;i<14;i++){ const x=rnd()*1024,y=40+rnd()*180; g.beginPath(); g.ellipse(x,y,40+rnd()*60,12+rnd()*10,0,0,7); g.fill(); }
+  }
+  return tex(c);
+}
+// --- distant tower silhouette with dense lit windows ---
+function skylineTexture(){
+  const [c,g]=cnv(2048,320); const rnd=mulberry32(77);
+  g.clearRect(0,0,2048,320);
+  let x=0;
+  while(x<2048){
+    const bw=70+rnd()*150, bh=90+rnd()*220;
+    g.fillStyle='#03050c'; g.fillRect(x,320-bh,bw,bh);
+    for(let wy=320-bh+10;wy<310;wy+=13) for(let wx=x+7;wx<x+bw-7;wx+=11){
+      if(rnd()<0.30){
+        const r=rnd();
+        g.fillStyle=r<0.6?`rgba(255,${170+rnd()*50|0},110,0.85)`: r<0.88? 'rgba(150,195,255,0.85)':'rgba(120,230,210,0.85)';
+        g.fillRect(wx,wy,6,7);
+      }
+    }
+    // aviation beacon on some towers
+    if(rnd()<0.4){ g.fillStyle='#ff2a2a'; g.fillRect(x+bw/2-2,320-bh-9,4,4); }
+    x+=bw+10+rnd()*60;
+  }
+  return tex(c);
+}
+
+// ---------- lights ----------
+const hemi = new THREE.HemisphereLight(0x46547e, 0x161220, 0.9); scene.add(hemi);
+const moon = new THREE.DirectionalLight(0x8fb0ff, 0.75);
+moon.position.set(-30, 50, 20); moon.castShadow = true;
+moon.shadow.mapSize.set(2048, 2048);
+moon.shadow.camera.left=-90; moon.shadow.camera.right=90;
+moon.shadow.camera.top=90; moon.shadow.camera.bottom=-90;
+moon.shadow.camera.far=300; moon.shadow.bias=-0.0004;
+scene.add(moon); scene.add(moon.target); moon.target.position.set(0,0,-50);
+const sun = new THREE.DirectionalLight(0xfff2dd, 0.0);
+sun.position.set(35, 60, 30); sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left=-90; sun.shadow.camera.right=90;
+sun.shadow.camera.top=90; sun.shadow.camera.bottom=-90;
+sun.shadow.camera.far=300; sun.shadow.bias=-0.0004;
+scene.add(sun); scene.add(sun.target); sun.target.position.set(0,0,-50);
+// cool teal counter-fill (Akira palette) + warm street wash
+const tealFill = new THREE.PointLight(0x1f8a8a, 0, 140, 1.8);
+tealFill.position.set(-40, 45, -60); scene.add(tealFill);
+const amberFill = new THREE.PointLight(0xd86a28, 0, 120, 1.8);
+amberFill.position.set(45, 30, -20); scene.add(amberFill);
+const shopLights = [];
+const lampLights = [];
+for (const [x,z] of [[-8.2,-14],[8.2,-38],[-8.2,-62],[8.2,-86],[-8.2,-108]]){
+  const p=new THREE.PointLight(0xffe6c0, 0, 34, 1.7);
+  p.position.set(x, 7.6, z); scene.add(p); lampLights.push(p);
+}
+
+// ---------- shared materials ----------
+const dimmables=[]; // day/night dimming registry
+const MAT = {
+  steelDark: new THREE.MeshStandardMaterial({ color:0x1a1e26, roughness:0.55, metalness:0.65 }),
+  blackSteel:new THREE.MeshStandardMaterial({ color:0x141821, roughness:0.5,  metalness:0.7 }),
+  concrete:  new THREE.MeshStandardMaterial({ color:0x3a3e46, roughness:0.9, metalness:0.0 }),
+  plinth:    new THREE.MeshStandardMaterial({ color:0x20252e, roughness:0.8, metalness:0.05 }),
+  frameDark: new THREE.MeshStandardMaterial({ color:0x101319, roughness:0.45, metalness:0.6 }),
+  glass:     new THREE.MeshStandardMaterial({ color:0x4a5a6a, roughness:0.12, metalness:0.25,
+    transparent:true, opacity:0.30 }),
+  poleConc:  new THREE.MeshStandardMaterial({ color:0x2c2f36, roughness:0.9 }),
+  evaGreen:  new THREE.MeshStandardMaterial({ color:0x3f7a55, roughness:0.5, metalness:0.35 }),
+  evaGreenDk:new THREE.MeshStandardMaterial({ color:0x2a5239, roughness:0.55, metalness:0.35 }),
+  white:     new THREE.MeshStandardMaterial({ color:0xd8dce4, roughness:0.7 }),
+};
+function box(w,h,d,mat,x=0,y=0,z=0){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat);
+  m.position.set(x,y,z); m.castShadow=true; m.receiveShadow=true; return m;
+}
+function emissiveBoard(w,h,t,canvasTex,intensity=1.6){
+  const m=new THREE.MeshStandardMaterial({ map:canvasTex, emissive:0xffffff,
+    emissiveMap:canvasTex, emissiveIntensity:intensity, roughness:0.5, metalness:0.0 });
+  regDimStd(m, intensity);
+  const mesh=new THREE.Mesh(new THREE.BoxGeometry(w,h,t),m);
+  mesh.castShadow=true; return mesh;
+}
+function regDimStd(mat, base){ dimmables.push({ mat, base, std:true }); }
+function regDimBasic(mat){ dimmables.push({ mat, base:mat.color.clone(), std:false }); }
+function applyDim(night){
+  for(const d of dimmables){
+    if(d.std) d.mat.emissiveIntensity=d.base*(night?1:0.32);
+    else d.mat.color.copy(d.base).multiplyScalar(night?1:0.40);
+  }
+  for(const b of beacons) b.mat.color.copy(b.base).multiplyScalar(night?1:0.40);
+}
+
+// ---------- ground: mirror-wet asphalt, sidewalks, curbs ----------
+function buildGround(){
+  const base=new THREE.Mesh(new THREE.PlaneGeometry(420,420),
+    new THREE.MeshStandardMaterial({ color:0x0c0e13, roughness:0.95 }));
+  base.rotation.x=-Math.PI/2; base.position.set(0,-0.08,-50); base.receiveShadow=true; scene.add(base);
+
+  const road=new THREE.Mesh(new THREE.PlaneGeometry(14,130),
+    new THREE.MeshStandardMaterial({ map:roadTexture(), roughness:0.26, metalness:0.18 }));
+  road.rotation.x=-Math.PI/2; road.position.set(0,0,-51); road.receiveShadow=true; scene.add(road);
+
+  const conc=concreteTexture(); conc.repeat.set(1,16);
+  for(const s of [-1,1]){
+    const sw=new THREE.Mesh(new THREE.PlaneGeometry(4.6,132),
+      new THREE.MeshStandardMaterial({ map:conc.clone(), roughness:0.55, metalness:0.05 }));
+    sw.material.map.repeat.set(1,16);
+    sw.rotation.x=-Math.PI/2; sw.position.set(s*9.4,0.15,-51); sw.receiveShadow=true; scene.add(sw);
+    const curb=box(0.35,0.32,132,MAT.plinth,s*7.18,0.0,-51); scene.add(curb);
+    const ap=new THREE.Mesh(new THREE.PlaneGeometry(6,132),
+      new THREE.MeshStandardMaterial({ color:0x1c1f26, roughness:0.8 }));
+    ap.rotation.x=-Math.PI/2; ap.position.set(s*14.7,0.02,-51); ap.receiveShadow=true; scene.add(ap);
+  }
+}
+
+// ---------- tate-kanban: perpendicular board on VISIBLE bracket arms ----------
+function tateKanban(o){
+  const D=o.dim==null?1:o.dim;
+  const g=new THREE.Group();
+  const bx=o.x + o.dir*(0.18+o.w/2);
+  const boardT=0.09;
+  const t=signTexture({ text:o.text, sub:o.sub, bg:o.bg, fg:o.fg, vertical:true,
+    w:Math.round(o.w*220), h:Math.round(o.h*220) });
+  const board=emissiveBoard(o.w, o.h, boardT, t, 1.7*D);
+  board.position.set(bx, o.y, o.z);
+  g.add(board);
+  const x0=o.x+o.dir*0.10, x1=o.x+o.dir*(0.18+0.02);
+  for(const dy of [o.h/2-0.25, -(o.h/2-0.25)]){
+    const len=Math.abs(x1-x0)+o.w;
+    const arm=box(len, 0.09, 0.09, MAT.blackSteel, (x0+x1)/2+o.dir*o.w/2, o.y+dy, o.z);
+    g.add(arm);
+    const plate=box(0.06,0.34,0.22,MAT.steelDark, o.x+o.dir*0.06, o.y+dy, o.z);
+    g.add(plate);
+    const collar=box(0.14,0.16,0.16,MAT.steelDark, o.x+o.dir*(0.18+0.02), o.y+dy, o.z);
+    g.add(collar);
+  }
+  const strap=box(0.05, o.h-0.3, 0.06, MAT.steelDark, o.x+o.dir*0.16, o.y, o.z);
+  g.add(strap);
+  addBleed(o.x+o.dir*0.06, o.y, o.z, o.dir, o.w+2.6, o.h+2.2, new THREE.Color(o.bg), 0.26*D);
+  addStreak(bx+o.dir*0.2, o.z, 7+o.h*1.2, new THREE.Color(o.bg), 0.22*Math.max(D,0.15), 1.6);
+  return g;
+}
+// ---------- flat wall board, bolted flush to the facade ----------
+function wallBoard(o){
+  const t=signTexture({ text:o.text, sub:o.sub, bg:o.bg, fg:o.fg, vertical:!!o.vertical,
+    w:o.vertical?200:512, h:o.vertical?512:150 });
+  const board=emissiveBoard(o.w, o.h, 0.08, t, 1.5*(o.dim==null?1:o.dim));
+  board.position.set(o.x+o.dir*0.10, o.y, o.z);
+  board.rotation.y=o.dir>0? Math.PI/2 : -Math.PI/2;
+  const g=new THREE.Group(); g.add(board);
+  for(const [dx,dy] of [[-o.w/2+0.15,-o.h/2+0.15],[o.w/2-0.15,-o.h/2+0.15],[-o.w/2+0.15,o.h/2-0.15],[o.w/2-0.15,o.h/2-0.15]]){
+    const b=new THREE.Mesh(new THREE.SphereGeometry(0.035,8,6), MAT.steelDark);
+    b.position.set(o.x+o.dir*0.16, o.y+dy, o.z+dx); g.add(b);
+  }
+  return g;
+}
+
+// ---------- compact tower storefront (ground floor) ----------
+function towerStorefront(b, fx){
+  const dir=b.dir, g=new THREE.Group();
+  const GF=5.2, W=b.w;
+  const rnd=mulberry32(b.seed+5);
+  const open=!b.closed, D=open?1:0.28;
+  g.add(box(0.5,0.5,W,MAT.plinth, fx+dir*0.02, 0.40, b.z));
+  const revD=0.55;
+  for(const s of [-1,1])
+    g.add(box(revD,GF-0.9,0.2,MAT.frameDark, fx-dir*revD/2+dir*0.02, (GF-0.9)/2+0.5, b.z+s*(W/2-0.72)));
+  g.add(box(revD,0.28,W-1.24,MAT.frameDark, fx-dir*revD/2+dir*0.02, GF-0.72, b.z));
+  const it=interiorTexture(b.seed, open?(b.warm||'#ffca7a'):'#8a6a48');
+  const glowMat=new THREE.MeshBasicMaterial({ map:it, color: open?0xffffff:0x7a6752 });
+  regDimBasic(glowMat);
+  const glow=new THREE.Mesh(new THREE.PlaneGeometry(W-1.6, GF-1.1), glowMat);
+  glow.position.set(fx-dir*(revD-0.08), (GF-1.1)/2+0.55, b.z);
+  glow.rotation.y=dir>0? Math.PI/2 : -Math.PI/2;
+  g.add(glow);
+  const bays=Math.max(3, Math.round(W/4.2));
+  const bayW=(W-1.2)/bays;
+  for(let i=0;i<bays;i++){
+    const bz=b.z-W/2+0.6+bayW*(i+0.5);
+    g.add(box(0.14,0.18,bayW-0.06,MAT.frameDark, fx+dir*0.06, GF-0.62, bz));
+    g.add(box(0.14,0.14,bayW-0.06,MAT.frameDark, fx+dir*0.06, 0.62, bz));
+    const gl=box(0.05,GF-1.5,bayW-0.18,MAT.glass, fx+dir*0.02, (GF-1.5)/2+0.55, bz); g.add(gl);
+    g.add(box(0.1,GF-1.5,0.09,MAT.frameDark, fx+dir*0.05, (GF-1.5)/2+0.55, bz+bayW/2-0.03));
+  }
+  for(let i=0;i<=bays;i++){
+    const pz=b.z-W/2+0.6+i*bayW;
+    g.add(box(0.22,GF-0.4,0.24,MAT.plinth, fx+dir*0.10, (GF-0.4)/2+0.5, pz));
+  }
+  const ft=fasciaTexture(b.shop, b.shopSub, b.fasciaBg, b.fasciaFg);
+  const fascia=emissiveBoard(W-0.6, 1.05, 0.12, ft, 1.65*D);
+  fascia.position.set(fx+dir*0.10, GF-0.05, b.z);
+  fascia.rotation.y=dir>0? Math.PI/2 : -Math.PI/2;
+  g.add(fascia);
+  for(const dy of [-0.45,0.45])
+    g.add(box(0.1,0.08,W-0.4,MAT.blackSteel, fx+dir*0.03, GF-0.05+dy, b.z));
+  const bleedC=new THREE.Color(b.fasciaBg);
+  addBleed(fx+dir*0.06, GF+1.05, b.z, dir, W-0.4, 2.6, bleedC, 0.30*D);
+  addBleed(fx+dir*0.26, GF-1.9, b.z, dir, W-0.4, 2.2, bleedC, 0.20*D);
+  if(open){
+    const p=new THREE.PointLight(new THREE.Color(b.warm||'#ffca7a'), 0, 24, 1.7);
+    p.position.set(fx+dir*1.6, 3.0, b.z); scene.add(p); shopLights.push(p);
+  }
+  addStreak(fx+dir*1.4, b.z, 9, new THREE.Color(b.warm||'#ffca7a'), 0.20*D, 2.6);
+  return g;
+}
+
+// ---------- aviation beacons: blink ~1.5s period (handled in loop()) ----------
+const beacons=[];
+function addBeacon(x,y,z){
+  const mat=new THREE.MeshBasicMaterial({ color:0xff2a2a });
+  const base=mat.color.clone();
+  const s=new THREE.Mesh(new THREE.SphereGeometry(0.28,10,8), mat);
+  s.position.set(x,y,z); scene.add(s);
+  // mast stub: beacon is physically mounted, not floating
+  scene.add(box(0.12,0.7,0.12,MAT.blackSteel, x, y-0.45, z));
+  beacons.push({ mat, base });
+  // soft red halo so the blink reads at distance
+  const haloMat=new THREE.MeshBasicMaterial({ map:bleedTex, color:0xff2a2a, transparent:true,
+    opacity:0.5, blending:THREE.AdditiveBlending, depthWrite:false });
+  const halo=new THREE.Mesh(new THREE.PlaneGeometry(3,3), haloMat);
+  halo.position.set(x,y,z); halo.onBeforeRender=(r,sc,c,geo,mm,grp)=>{
+    halo.lookAt(camera.position); // billboard
+  };
+  beacons[beacons.length-1].halo=haloMat;
+  scene.add(halo);
+}
+
+// ---------- downtown tower: dense-window body + neon trim + storefront + signs ----------
+function makeTower(b){
+  const g=new THREE.Group();
+  const depth=14, cx=b.x + (b.dir>0? -depth/2 : depth/2);
+  const fx=b.x;
+  const ft=facadeTexture({ w:b.w, h:b.h, stories:b.stories, tint:b.tint, seed:b.seed, lit:b.lit });
+  const facMat=new THREE.MeshStandardMaterial({ map:ft, emissive:0xffffff,
+    emissiveMap:ft, emissiveIntensity:1.15, roughness:0.8 });
+  regDimStd(facMat, 1.15);
+  const topMat=new THREE.MeshStandardMaterial({ color:0x15171e, roughness:0.95 });
+  const body=new THREE.Mesh(new THREE.BoxGeometry(depth, b.h, b.w),
+    [facMat,facMat,topMat,topMat,facMat,facMat]);
+  body.position.set(cx, b.h/2, b.z); body.castShadow=true; body.receiveShadow=true; g.add(body);
+  // parapet + cornice
+  g.add(box(depth+0.5,0.6,b.w+0.5,MAT.plinth, cx, b.h+0.3, b.z));
+  // rooftop AC boxes
+  const rnd=mulberry32(b.seed+9);
+  for(let i=0;i<3;i++){
+    const ax=cx+(rnd()-0.5)*depth*0.5, az=b.z+(rnd()-0.5)*b.w*0.5;
+    g.add(box(1.6,1.0,1.2,MAT.steelDark, ax, b.h+1.1, az));
+    g.add(box(1.8,0.2,1.4,MAT.plinth, ax, b.h+0.7, az));
+  }
+  // neon edge trim (physically mounted corner strips + horizontal bands), some towers
+  if(b.trim){
+    const tc=new THREE.MeshBasicMaterial({ color:new THREE.Color(b.trim) });
+    regDimBasic(tc);
+    const stripX=fx+(b.dir>0?0.06:-0.06);   // street-side face, never inside the street
+    for(const dz of [-b.w/2+0.15, b.w/2-0.15]){
+      const strip=new THREE.Mesh(new THREE.BoxGeometry(0.12,b.h-1,0.12), tc);
+      strip.position.set(stripX, (b.h-1)/2+0.5, b.z+dz); g.add(strip);
+    }
+    for(const by of [12, 22, 32]){
+      if(by>b.h-3) break;
+      const band=new THREE.Mesh(new THREE.BoxGeometry(0.1,0.18,b.w), tc);
+      band.position.set(fx+(b.dir>0?0.08:-0.08), by, b.z); g.add(band);
+    }
+    addStreak(fx+b.dir*0.4, b.z, 16, new THREE.Color(b.trim), 0.30, 2.4);
+  }
+  // downspout
+  g.add(box(0.14,b.h-1,0.14,MAT.steelDark, fx+b.dir*0.12, (b.h-1)/2+0.5, b.z+b.w/2-0.9));
+  // ground-floor storefront
+  g.add(towerStorefront(b, fx));
+  // tate-kanban + wall boards
+  for(const k of (b.kanban||[]))
+    g.add(tateKanban({ x:fx, dir:b.dir, z:b.z+k.dz, y:k.y, w:k.w||0.95, h:k.h||4.2,
+      text:k.text, sub:k.sub, bg:k.bg, fg:k.fg, dim: b.closed?0.28:1 }));
+  for(const wb of (b.wallBoards||[]))
+    g.add(wallBoard({ x:fx, dir:b.dir, z:b.z+wb.dz, y:wb.y, w:wb.w, h:wb.h,
+      text:wb.text, sub:wb.sub, bg:wb.bg, fg:wb.fg, vertical:wb.vertical, dim: b.closed?0.28:1 }));
+  scene.add(g);
+  // aviation beacons on the two street-facing top corners
+  if(b.beacon){
+    const bx=fx+(b.dir>0?0.3:-0.3);
+    addBeacon(bx, b.h+1.0, b.z-b.w/2+0.5);
+    addBeacon(bx, b.h+1.0, b.z+b.w/2-0.5);
+  }
+  return g;
+}
+
+// ---------- district data: 35–70 m towers, densest facade signage ----------
+const TOWERS=[
+ // west row (facade x=-18, faces +X)
+ { x:-18, dir:1, z:-14, w:20, h:52, stories:14, seed:101, tint:'#1a2030', lit:0.68, trim:'#00e5ff', beacon:true,
+   shop:'居酒屋', shopSub:'新大門 24時間', fasciaBg:'#4a2410', fasciaFg:'#ffd98a', warm:'#ffca7a',
+   kanban:[ {dz:-6.2,y:9.4,h:5.0,text:'居酒屋',bg:'#4a2410',fg:'#ffd98a'},
+            {dz: 5.8,y:8.2,h:3.8,text:'24時間',bg:'#0e2a6a',fg:'#e3ecff'} ],
+   wallBoards:[ {dz:0,y:12.5,w:4.2,h:1.2,text:'カラオケ パセラ',bg:'#a01248',fg:'#ffe4f0'} ] },
+ { x:-18, dir:1, z:-36, w:18, h:40, stories:11, seed:102, tint:'#20242f', lit:0.66, beacon:false,
+   shop:'ラーメン', shopSub:'すすや', fasciaBg:'#c33d08', fasciaFg:'#ffe9c9', warm:'#ffb36a',
+   kanban:[ {dz:-5.4,y:8.8,h:4.6,text:'ラーメン',bg:'#c33d08',fg:'#ffe9c9'},
+            {dz: 5.6,y:7.6,h:3.6,text:'餃子',bg:'#a01818',fg:'#fff4e0'} ],
+   wallBoards:[ {dz:0,y:11.8,w:3.6,h:1.1,text:'うどん そば',bg:'#0a7a3a',fg:'#e2ffe9'} ] },
+ { x:-18, dir:1, z:-58, w:22, h:64, stories:17, seed:103, tint:'#1c2233', lit:0.70, trim:'#ff3fa4', beacon:true,
+   shop:'カラオケ館', shopSub:'KARAOKE 24H', fasciaBg:'#a01248', fasciaFg:'#ffe4f0', warm:'#ffc4da',
+   kanban:[ {dz:-6.8,y:10.2,h:5.4,text:'カラオケ',bg:'#a01248',fg:'#ffe4f0'},
+            {dz: 6.6,y:9.0,h:4.2,text:'ゲーム',bg:'#0e3fa0',fg:'#e3ecff'} ],
+   wallBoards:[ {dz:0,y:13.5,w:4.4,h:1.2,text:'ネットカフェ',bg:'#101318',fg:'#7ae0ff'} ] },
+ { x:-18, dir:1, z:-82, w:18, h:46, stories:12, seed:104, tint:'#242028', lit:0.64, beacon:false,
+   shop:'薬局', shopSub:'くすり 処方箋', fasciaBg:'#0e7a3a', fasciaFg:'#eafff0', warm:'#fff0d8',
+   kanban:[ {dz:-5.4,y:8.6,h:4.4,text:'薬局',bg:'#0e7a3a',fg:'#eafff0'},
+            {dz: 5.6,y:7.8,h:3.6,text:'免税',bg:'#0e3fa0',fg:'#e3ecff'} ],
+   wallBoards:[ {dz:0,y:12.0,w:3.8,h:1.1,text:'ドラッグストア',bg:'#101318',fg:'#ffe9c9'} ] },
+ { x:-18, dir:1, z:-104, w:20, h:58, stories:15, seed:105, tint:'#1e2635', lit:0.68, trim:'#ffd23f', beacon:true,
+   shop:'喫茶店', shopSub:'珈琲館', fasciaBg:'#efe6d0', fasciaFg:'#2a2018', warm:'#ffdfae',
+   kanban:[ {dz:-6.2,y:9.6,h:5.0,text:'喫茶店',bg:'#efe6d0',fg:'#2a2018'},
+            {dz: 6.0,y:8.4,h:3.8,text:'本屋',bg:'#2a3a5a',fg:'#e8f2ff'} ],
+   wallBoards:[ {dz:0,y:12.8,w:4.0,h:1.1,text:'古本まつり',bg:'#101318',fg:'#ffe9c9'} ] },
+ // east row (facade x=+18, faces -X)
+ { x:18, dir:-1, z:-12, w:20, h:46, stories:12, seed:111, tint:'#202030', lit:0.66, beacon:false,
+   shop:'焼肉', shopSub:'牛角 GYUKAKU', fasciaBg:'#701818', fasciaFg:'#ffd9a0', warm:'#ff9a5e',
+   kanban:[ {dz:-6.2,y:9.2,h:4.8,text:'焼肉',bg:'#701818',fg:'#ffd9a0'},
+            {dz: 5.8,y:8.0,h:3.8,text:'串焼き',bg:'#8a2a10',fg:'#ffe9c9'} ],
+   wallBoards:[ {dz:0,y:12.2,w:4.0,h:1.1,text:'沖縄料理',bg:'#0a5a7a',fg:'#e8fbff'} ] },
+ { x:18, dir:-1, z:-34, w:18, h:70, stories:19, seed:112, tint:'#1a2032', lit:0.70, trim:'#00e5ff', beacon:true,
+   shop:'パチンコ', shopSub:'PACHINKO SLOT', fasciaBg:'#8a1010', fasciaFg:'#ffe36a', warm:'#ffe9a0',
+   kanban:[ {dz:-5.6,y:10.6,h:5.6,text:'パチンコ',bg:'#8a1010',fg:'#ffe36a'},
+            {dz: 5.4,y:9.2,h:4.2,text:'スロット',bg:'#101318',fg:'#ff9a5e'} ],
+   wallBoards:[ {dz:0,y:14.2,w:4.4,h:1.2,text:'新台入替',bg:'#5a0a0a',fg:'#ffe36a'} ] },
+ { x:18, dir:-1, z:-56, w:22, h:38, stories:10, seed:113, tint:'#221e28', lit:0.64, beacon:false,
+   shop:'寿司', shopSub:'銀八 GINPACHI', fasciaBg:'#123a6a', fasciaFg:'#e8f2ff', warm:'#ffd9a0',
+   kanban:[ {dz:-6.8,y:8.4,h:4.4,text:'寿司',bg:'#123a6a',fg:'#e8f2ff'},
+            {dz: 6.6,y:7.6,h:3.6,text:'焼鳥',bg:'#5a2a10',fg:'#ffe9c9'} ],
+   wallBoards:[ {dz:0,y:11.5,w:3.8,h:1.0,text:'出前 承ります',bg:'#101318',fg:'#cfe0ff'} ] },
+ { x:18, dir:-1, z:-80, w:18, h:54, stories:14, seed:114, tint:'#1e2430', lit:0.68, trim:'#ff6a3f', beacon:true,
+   shop:'餃子', shopSub:'大阪王将', fasciaBg:'#c02818', fasciaFg:'#fff4e0', warm:'#ffb36a',
+   kanban:[ {dz:-5.4,y:9.8,h:5.0,text:'餃子',bg:'#c02818',fg:'#fff4e0'},
+            {dz: 5.6,y:8.6,h:3.8,text:'中華',bg:'#8a1810',fg:'#ffe9c9'} ],
+   wallBoards:[ {dz:0,y:12.6,w:4.0,h:1.1,text:'飲茶 食べ放題',bg:'#101318',fg:'#ffe9c9'} ] },
+ { x:18, dir:-1, z:-102, w:20, h:44, stories:12, seed:115, tint:'#20242e', lit:0.66, beacon:false,
+   shop:'居酒屋横丁', shopSub:'ネオン横丁', fasciaBg:'#2a1a40', fasciaFg:'#d8c8ff', warm:'#ffc4da', closed:true,
+   kanban:[ {dz:-6.2,y:9.0,h:4.6,text:'横丁',bg:'#2a1a40',fg:'#d8c8ff'} ],
+   wallBoards:[ {dz:0,y:12.0,w:4.0,h:1.1,text:'BAR 2F',bg:'#101318',fg:'#7ae0ff'} ] },
+];
+
+// ---------- elevated air-train: EVA-style green steel, curving between towers ----------
+// rail path: gentle S-curve along the street (z 20 -> -124)
+function railPoint(s){
+  const z = 20 - s*144;
+  const x = 2.2 + 4.5*Math.sin(z*0.035) + 1.2*Math.sin(z*0.012+1.3);
+  return new THREE.Vector3(x, 12.6, z);
+}
+function boxBetween(p0, p1, w, h, mat){
+  const d=new THREE.Vector3().subVectors(p1,p0);
+  const len=d.length();
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,len), mat);
+  m.position.copy(p0).addScaledVector(d,0.5);
+  m.lookAt(p1);
+  m.castShadow=true; m.receiveShadow=true;
+  return m;
+}
+function buildAirTrain(){
+  const g=new THREE.Group();
+  const N=48;
+  // deck: twin girders + deck plate, segmented along the curve
+  let prev=railPoint(0);
+  const deckPts=[prev.clone()];
+  for(let i=1;i<=N;i++){
+    const p=railPoint(i/N);
+    deckPts.push(p.clone());
+    g.add(boxBetween(prev.clone().add(new THREE.Vector3(-1.0,-0.9,0)),
+                     p.clone().add(new THREE.Vector3(-1.0,-0.9,0)), 0.5, 1.4, MAT.evaGreenDk));
+    g.add(boxBetween(prev.clone().add(new THREE.Vector3(1.0,-0.9,0)),
+                     p.clone().add(new THREE.Vector3(1.0,-0.9,0)), 0.5, 1.4, MAT.evaGreenDk));
+    g.add(boxBetween(prev.clone().add(new THREE.Vector3(0,-0.35,0)),
+                     p.clone().add(new THREE.Vector3(0,-0.35,0)), 3.6, 0.35, MAT.evaGreen));
+    // guard rails on the deck edges
+    for(const dx of [-1.75,1.75]){
+      g.add(boxBetween(prev.clone().add(new THREE.Vector3(dx,0.6,0)),
+                       p.clone().add(new THREE.Vector3(dx,0.6,0)), 0.08, 0.9, MAT.evaGreenDk));
+    }
+    prev=p;
+  }
+  // running rails (two bright steel strips)
+  let q0=railPoint(0);
+  for(let i=1;i<=N;i++){
+    const q1=railPoint(i/N);
+    for(const dx of [-0.75,0.75])
+      g.add(boxBetween(q0.clone().add(new THREE.Vector3(dx,0.05,0)),
+                       q1.clone().add(new THREE.Vector3(dx,0.05,0)), 0.12, 0.1, MAT.steelDark));
+    q0=q1;
+  }
+  // portal bents: columns on the sidewalks + crossbeam under the deck (EVA-style)
+  for(let i=0;i<=8;i++){
+    const s=i/8, p=railPoint(s);
+    const z=p.z;
+    for(const sx of [-1,1]){
+      g.add(box(0.9,11.6,0.9,MAT.evaGreen, sx*9.6, 5.8, z));
+      g.add(box(1.4,0.4,1.4,MAT.evaGreenDk, sx*9.6, 0.2, z));
+    }
+    g.add(box(20.1,1.0,1.1,MAT.evaGreen, 0, 11.5, z));
+    // knee braces: column top -> crossbeam
+    for(const sx of [-1,1]){
+      const br=new THREE.Mesh(new THREE.CylinderGeometry(0.14,0.14,3.2,8), MAT.evaGreenDk);
+      br.position.set(sx*7.8, 10.6, z); br.rotation.z=sx*0.9; br.castShadow=true; g.add(br);
+    }
+  }
+  scene.add(g);
+  // streak under the lit viaduct edge (wet road reflection of the green structure)
+  for(const s of [0.15,0.5,0.85]){
+    const p=railPoint(s);
+    addStreak(p.x, p.z, 10, 0x3fa86a, 0.10, 2.2);
+  }
+}
+// red/white EVA-02-style train with lit windows, moving slowly on a loop
+const trains=[];
+function trainTexture(){
+  const [c,g]=cnv(512,128);
+  g.fillStyle='#e8e4da'; g.fillRect(0,0,512,128);          // white body
+  g.fillStyle='#c01818'; g.fillRect(0,0,512,44);           // red roof band
+  g.fillStyle='#c01818'; g.fillRect(0,116,512,12);         // red skirt
+  g.fillStyle='#1a1c20'; g.fillRect(0,52,512,56);          // window band base
+  for(let x=14;x<500;x+=42){                               // lit windows
+    g.fillStyle='rgba(255,214,150,0.98)'; g.fillRect(x,58,30,42);
+    g.fillStyle='rgba(0,0,0,0.35)'; g.fillRect(x+12,58,4,42);
+  }
+  return tex(c);
+}
+function buildTrain(){
+  const sideT=trainTexture();
+  const sideM=new THREE.MeshStandardMaterial({ map:sideT, emissive:0xffffff,
+    emissiveMap:sideT, emissiveIntensity:1.5, roughness:0.4, metalness:0.2 });
+  regDimStd(sideM, 1.5);
+  const endM=new THREE.MeshStandardMaterial({ color:0xd8d4ca, roughness:0.4, metalness:0.2 });
+  const topM=new THREE.MeshStandardMaterial({ color:0xb01515, roughness:0.45, metalness:0.2 });
+  for(const off of [0, 0.5]){   // two trains on the loop, opposite phases
+    const tg=new THREE.Group();
+    for(let ci=0;ci<3;ci++){
+      const car=new THREE.Group();
+      const body=new THREE.Mesh(new THREE.BoxGeometry(2.9,2.6,7.2),
+        [sideM,sideM,topM,endM,endM,endM]);
+      body.position.y=1.45; body.castShadow=true; car.add(body);
+      // headlight / taillight discs on the leading/trailing faces
+      const hlM=new THREE.MeshBasicMaterial({ color:0xfff6dc }); regDimBasic(hlM);
+      const tlM=new THREE.MeshBasicMaterial({ color:0xff2222 }); regDimBasic(tlM);
+      const hl=new THREE.Mesh(new THREE.CircleGeometry(0.16,10), ci===0?hlM:tlM);
+      hl.position.set(-0.7,1.1,(ci===0?3.62:-3.62)); if(ci!==0) hl.rotation.y=Math.PI; car.add(hl);
+      const hl2=hl.clone(); hl2.position.x=0.7; car.add(hl2);
+      car.position.z=-ci*7.5;
+      tg.add(car);
+    }
+    scene.add(tg);
+    trains.push({ g:tg, s0:off });
+  }
+}
+// train loop: slow ~91 s lap; each train oriented head-first along the curve
+function updateTrains(t){
+  for(const tr of trains){
+    const s=(t*0.011 + tr.s0)%1;
+    const p=railPoint(s);
+    const p2=railPoint((s+0.012)%1);
+    tr.g.position.copy(p);
+    tr.g.lookAt(p2);
+  }
+}
+
+// ---------- EVA pedestrian overpass: green steel, stairs, 第3新東京市 beam sign ----------
+// crosses the street at z=-45; stairs land on both sidewalks
+function overpassBeamTexture(){
+  const [c,g]=cnv(1600,220);
+  g.fillStyle='#e8e4d8'; g.fillRect(0,0,1600,220);
+  g.fillStyle='#2a3038'; g.textAlign='center'; g.textBaseline='middle';
+  let fs=104;
+  g.font=`900 ${fs}px ${CJK}`;
+  while(g.measureText('第3新東京市  旧仙石原高原五丁目').width>1480 && fs>40){ fs-=6; g.font=`900 ${fs}px ${CJK}`; }
+  g.fillText('第3新東京市  旧仙石原高原五丁目', 800, 92);
+  g.font=`700 44px ${CJK}`; g.fillStyle='#6a7078';
+  g.fillText('TOKYO-3   Kyu-sengokuhara-kogen 5', 800, 168);
+  g.strokeStyle='#2a3038'; g.lineWidth=8; g.strokeRect(8,8,1584,204);
+  return tex(c);
+}
+function warningSignTexture(){
+  const [c,g]=cnv(128,512);
+  g.fillStyle='#e8c018'; g.fillRect(0,0,128,512);
+  g.fillStyle='#141414'; g.strokeStyle='#141414'; g.lineWidth=6;
+  g.strokeRect(8,8,112,496);
+  // lightning bolt glyph
+  g.fillStyle='#141414';
+  g.beginPath(); g.moveTo(74,40); g.lineTo(44,260); g.lineTo(64,260); g.lineTo(52,470); g.lineTo(96,220); g.lineTo(74,220); g.closePath(); g.fill();
+  return tex(c);
+}
+function buildOverpass(){
+  const g=new THREE.Group();
+  const OZ=-45, DECK_Y=5.2, SPAN=11.2;
+  // deck
+  g.add(box(SPAN*2+1.2, 0.5, 2.8, MAT.evaGreen, 0, DECK_Y-0.25, OZ));
+  g.add(box(SPAN*2+1.2, 0.14, 3.0, MAT.evaGreenDk, 0, DECK_Y+0.02, OZ)); // walking plate
+  // railings: posts + top rail + mesh band on both deck faces
+  for(const sz of [-1,1]){
+    for(let x=-SPAN;x<=SPAN;x+=1.4)
+      g.add(box(0.08,1.1,0.08,MAT.evaGreenDk, x, DECK_Y+0.55, OZ+sz*1.42));
+    const rail=box(SPAN*2+1.2, 0.09, 0.09, MAT.evaGreen, 0, DECK_Y+1.12, OZ+sz*1.42); g.add(rail);
+    const band=new THREE.Mesh(new THREE.BoxGeometry(SPAN*2+1.2, 0.5, 0.03), MAT.evaGreenDk);
+    band.position.set(0, DECK_Y+0.75, OZ+sz*1.42); band.castShadow=true; g.add(band);
+  }
+  // support columns on the sidewalks (physically bolted: base plates)
+  for(const sx of [-1,1]){
+    const x=sx*(SPAN+0.4);
+    g.add(box(0.7,DECK_Y,0.7,MAT.evaGreen, x, DECK_Y/2, OZ));
+    g.add(box(1.3,0.3,1.3,MAT.evaGreenDk, x, 0.15, OZ));
+    // diagonal braces to the deck
+    const br=new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.12,3.4,8), MAT.evaGreenDk);
+    br.position.set(x-sx*1.2, DECK_Y-1.4, OZ); br.rotation.z=sx*0.8; br.castShadow=true; g.add(br);
+  }
+  // stairs: from deck ends down to the sidewalks (13 steps each)
+  for(const sx of [-1,1]){
+    const x0=sx*SPAN, x1=sx*(SPAN+4.6);
+    for(let i=0;i<13;i++){
+      const f=i/13;
+      const sxp=x0+(x1-x0)*f, syp=DECK_Y-(DECK_Y-0.4)*f;
+      g.add(box(0.42,0.22,2.4,MAT.evaGreen, sxp, syp-0.11, OZ));
+      // stair stringer sides
+      if(i%4===0) g.add(box(0.5,0.7,0.08,MAT.evaGreenDk, sxp, syp+0.3, OZ-1.25));
+      if(i%4===0) g.add(box(0.5,0.7,0.08,MAT.evaGreenDk, sxp, syp+0.3, OZ+1.25));
+    }
+    // stair handrails (sloped tubes both sides)
+    for(const sz of [-1,1]){
+      const a=new THREE.Vector3(x0-sx*0.2, DECK_Y+1.0, OZ+sz*1.2);
+      const b=new THREE.Vector3(x1+sx*0.2, 1.1, OZ+sz*1.2);
+      g.add(boxBetween(a, b, 0.08, 0.08, MAT.evaGreen));
+    }
+  }
+  // beam sign: 第3新東京市 — bolted between the deck fascia and the rail band
+  const bt=overpassBeamTexture();
+  const bsM=new THREE.MeshStandardMaterial({ map:bt, emissive:0xffffff, emissiveMap:bt,
+    emissiveIntensity:0.9, roughness:0.5 });
+  regDimStd(bsM, 0.9);
+  for(const sz of [-1,1]){
+    const sign=new THREE.Mesh(new THREE.PlaneGeometry(16,2.2), bsM);
+    sign.position.set(0, DECK_Y-1.7, OZ+sz*1.47);
+    if(sz<0) sign.rotation.y=Math.PI;
+    g.add(sign);
+    // cleats bolting the sign to the deck fascia
+    for(const cx of [-6,-2,2,6])
+      g.add(box(0.16,0.3,0.16,MAT.blackSteel, cx, DECK_Y-0.65, OZ+sz*1.44));
+  }
+  // yellow 架空線注意 warning sign on the west stair column (bracket-mounted, EVA ref)
+  const wt=warningSignTexture();
+  const wsM=new THREE.MeshStandardMaterial({ map:wt, emissive:0xffffff, emissiveMap:wt,
+    emissiveIntensity:0.85, roughness:0.5 });
+  regDimStd(wsM, 0.85);
+  const warn=new THREE.Mesh(new THREE.BoxGeometry(0.5,2.0,0.08),
+    [MAT.blackSteel,MAT.blackSteel,MAT.blackSteel,MAT.blackSteel,wsM,MAT.blackSteel]);
+  warn.position.set(-(SPAN+0.4)+0.55, 3.2, OZ+0.9);
+  warn.rotation.y=Math.PI/2; warn.castShadow=true; g.add(warn);
+  // bracket arms bolting the warning sign to the column
+  for(const dy of [-0.7,0.7])
+    g.add(box(0.7,0.07,0.07,MAT.blackSteel, -(SPAN+0.4)+0.2, 3.2+dy, OZ+0.9));
+  // downlight wash under the deck + reflection streak
+  const underM=new THREE.MeshBasicMaterial({ color:0xbfd8c8 }); regDimBasic(underM);
+  const under=new THREE.Mesh(new THREE.PlaneGeometry(2.0,0.9), underM);
+  under.rotation.x=Math.PI/2; under.position.set(0, DECK_Y-0.52, OZ); g.add(under);
+  addStreak(0, OZ, 8, 0x9fd8b8, 0.16, 2.4);
+  scene.add(g);
+}
+
+// ---------- utility poles + DENSE catenary wires (EVA wire density) ----------
+const wireMat = new THREE.MeshBasicMaterial({ color:0x050507 });
+function catenary(a, b, sag, radius=0.028){
+  const mid=new THREE.Vector3().addVectors(a,b).multiplyScalar(0.5); mid.y-=sag;
+  const mesh=new THREE.Mesh(new THREE.TubeGeometry(
+    new THREE.QuadraticBezierCurve3(a,mid,b), 20, radius, 6), wireMat);
+  scene.add(mesh);
+}
+function buildPoles(){
+  const V=(x,y,z)=>new THREE.Vector3(x,y,z);
+  const zs=[8,-9,-26,-43,-60,-77,-94,-111];
+  for(const z of zs){
+    for(const sx of [-1,1]){
+      const x=sx*9.6;
+      const g=new THREE.Group();
+      const p=new THREE.Mesh(new THREE.CylinderGeometry(0.14,0.18,10.5,10), MAT.poleConc);
+      p.position.set(x,5.4,z); p.castShadow=true; g.add(p);
+      g.add(box(0.4,0.35,0.4,MAT.poleConc, x, 0.32, z));
+      for(const cy of [9.6, 9.0, 8.4]) g.add(box(1.9,0.1,0.1,MAT.poleConc, x, cy, z)); // 3 crossarms
+      for(const ix of [-0.8,-0.4,0.4,0.8]) for(const cy of [9.6,9.0,8.4])
+        g.add(box(0.1,0.24,0.1,MAT.poleConc, x+ix, cy+0.12, z));                        // insulators
+      scene.add(g);
+    }
+  }
+  // along-street spans: 3 levels x 2 wire ends per side
+  for(let i=0;i<zs.length-1;i++){
+    for(const sx of [-1,1]){
+      const x=sx*9.6;
+      for(const cy of [9.6,9.0,8.4]) for(const dx of [-0.8,0.8])
+        catenary(V(x+dx,cy,zs[i]), V(x+dx,cy,zs[i+1]), 1.1+((i*7)%3)*0.25);
+    }
+  }
+  // cross-street spans (over the road) at two z's — EVA density
+  for(const z of [-26,-77]){
+    for(const cy of [9.6,9.0])
+      catenary(V(-9.6,cy,z), V(9.6,cy,z), 2.2, 0.024);
+  }
+  // service drops: pole -> nearby tower facade (2 per side, diagonal)
+  catenary(V(-9.6,8.4,-9), V(-17.9,11.0,-14), 0.9, 0.02);
+  catenary(V(9.6,8.4,-60), V(17.9,10.0,-56), 0.9, 0.02);
+}
+
+// ---------- Japanese cobra street lamps ----------
+function buildLamps(){
+  const spots=[[-8.2,-14,1],[8.2,-38,-1],[-8.2,-62,1],[8.2,-86,-1],[-8.2,-108,1]];
+  for(const [x,z,armDir] of spots){
+    const g=new THREE.Group();
+    g.add(box(0.5,0.25,0.5,MAT.steelDark, x, 0.28, z));
+    const pole=new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.13,8,10), MAT.steelDark);
+    pole.position.set(x,4.15,z); pole.castShadow=true; g.add(pole);
+    const armCurve=new THREE.QuadraticBezierCurve3(
+      new THREE.Vector3(x,7.9,z), new THREE.Vector3(x+armDir*1.1,8.15,z), new THREE.Vector3(x+armDir*2.1,7.7,z));
+    g.add(new THREE.Mesh(new THREE.TubeGeometry(armCurve,12,0.06,8), MAT.steelDark));
+    g.add(box(0.9,0.16,0.3,MAT.blackSteel, x+armDir*2.1, 7.62, z));
+    const lensMat=new THREE.MeshBasicMaterial({ color:0xfff0d8 }); regDimBasic(lensMat);
+    const lens=new THREE.Mesh(new THREE.PlaneGeometry(0.7,0.22), lensMat);
+    lens.rotation.x=Math.PI/2; lens.position.set(x+armDir*2.1, 7.52, z); g.add(lens);
+    addStreak(x+armDir*1.2, z, 12, 0xffe6c0, 0.30, 1.8);
+    scene.add(g);
+  }
+}
+
+// ---------- vending machines ----------
+function vendingMachine(x,z,rotY,seed){
+  const g=new THREE.Group();
+  g.add(box(1.1,0.12,0.9,MAT.plinth, 0, 0.21, 0));
+  const bodyM=new THREE.MeshStandardMaterial({ color:0xb8202a, roughness:0.4, metalness:0.2 });
+  const body=new THREE.Mesh(new THREE.BoxGeometry(1.0,1.9,0.75), bodyM);
+  body.position.y=1.16; body.castShadow=true; g.add(body);
+  const [c,gg]=cnv(128,192); const rnd=mulberry32(seed);
+  gg.fillStyle='#0a0c10'; gg.fillRect(0,0,128,192);
+  gg.fillStyle='#cfe8ff'; gg.font=`900 30px ${CJK}`; gg.textAlign='center';
+  gg.fillText('飲料', 64, 34);
+  for(let r=0;r<4;r++) for(let i=0;i<4;i++){
+    gg.fillStyle=`hsl(${rnd()*360},70%,55%)`; gg.fillRect(12+i*27, 52+r*32, 20, 26);
+  }
+  gg.fillStyle='#0a0c10'; gg.fillRect(0,176,128,16);
+  const frontMat=new THREE.MeshBasicMaterial({ map:tex(c) }); regDimBasic(frontMat);
+  const front=new THREE.Mesh(new THREE.PlaneGeometry(0.86,1.5), frontMat);
+  front.position.set(0,1.28,0.381); g.add(front);
+  addStreak(x, z, 5, 0x9fd0ff, 0.18, 1.2);
+  g.position.set(x,0.15,z); g.rotation.y=rotY; scene.add(g);
+}
+
+// ---------- pedestrians ----------
+function pedestrian(x,z,rotY,seed){
+  const rnd=mulberry32(seed);
+  const g=new THREE.Group();
+  g.add(box(0.5,0.06,0.5,MAT.plinth, 0, 0.18, 0));
+  const coat=[0x2a3444,0x4a2a30,0x30363f,0x39424f][seed%4];
+  const cm=new THREE.MeshStandardMaterial({ color:coat, roughness:0.9 });
+  const bodyM=new THREE.Mesh(new THREE.CapsuleGeometry(0.17,0.75,4,8), cm);
+  bodyM.position.y=0.85; bodyM.castShadow=true; g.add(bodyM);
+  const head=new THREE.Mesh(new THREE.SphereGeometry(0.12,10,8),
+    new THREE.MeshStandardMaterial({ color:0xd8b596, roughness:0.8 }));
+  head.position.y=1.52; head.castShadow=true; g.add(head);
+  g.position.set(x,0.15,z); g.rotation.y=rotY; scene.add(g);
+}
+
+// ---------- cars: visible headlights/taillights (streaks only under them) ----------
+function car(x,z,rotY,seed){
+  const g=new THREE.Group();
+  const cols=[0x3a3f4a,0x5a1a1a,0x1a2a3a,0x4a4a4e];
+  const cm=new THREE.MeshStandardMaterial({ color:cols[seed%4], roughness:0.35, metalness:0.5 });
+  const body=box(1.8,0.75,4.2,cm, 0, 0.75, 0); g.add(body);
+  g.add(box(1.6,0.6,2.2,cm, 0, 1.35, -0.2));
+  const wm=new THREE.MeshStandardMaterial({ color:0x111418, roughness:0.6 });
+  for(const [wx,wz] of [[-0.85,1.35],[0.85,1.35],[-0.85,-1.35],[0.85,-1.35]]){
+    const w=new THREE.Mesh(new THREE.CylinderGeometry(0.33,0.33,0.24,12), wm);
+    w.rotation.z=Math.PI/2; w.position.set(wx,0.33,wz); w.castShadow=true; g.add(w);
+  }
+  const hlM=new THREE.MeshBasicMaterial({ color:0xfff2d0 }); regDimBasic(hlM);
+  const tlM=new THREE.MeshBasicMaterial({ color:0xff2a2a }); regDimBasic(tlM);
+  for(const sx of [-0.55,0.55]){
+    const hl=new THREE.Mesh(new THREE.CircleGeometry(0.13,10), hlM);
+    hl.position.set(sx,0.8,2.12); g.add(hl);
+    const tl=new THREE.Mesh(new THREE.CircleGeometry(0.11,10), tlM);
+    tl.position.set(sx,0.85,-2.12); tl.rotation.y=Math.PI; g.add(tl);
+  }
+  g.position.set(x,0,z); g.rotation.y=rotY; scene.add(g);
+  // headlight wash + taillight streak on the wet asphalt (visible sources only)
+  const fwd=new THREE.Vector3(Math.sin(rotY),0,Math.cos(rotY));
+  addStreak(x+fwd.x*3.5, z+fwd.z*3.5, 7, 0xfff2d0, 0.22, 2.6);
+  addStreak(x-fwd.x*2.8, z-fwd.z*2.8, 5, 0xff2a2a, 0.20, 2.0);
+}
+
+// ---------- distant skyline silhouette + sky dome ----------
+function buildSkyline(){
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(760,110),
+    new THREE.MeshBasicMaterial({ map:skylineTexture(), transparent:true, fog:false, depthWrite:false }));
+  m.position.set(0,40,-225); scene.add(m);
+  const m2=m.clone(); m2.position.set(-260,36,60); m2.rotation.y=Math.PI/2.4; scene.add(m2);
+  const m3=m.clone(); m3.position.set(260,36,60); m3.rotation.y=-Math.PI/2.4; scene.add(m3);
+  const skyMat=new THREE.MeshBasicMaterial({ map:skyTexture(true), side:THREE.BackSide, fog:false, depthWrite:false });
+  const dome=new THREE.Mesh(new THREE.SphereGeometry(400,32,20), skyMat);
+  dome.position.set(0,0,-60); scene.add(dome);
+  window.__sp2sky={ skyMat, day:skyTexture(false), night:skyMat.map };
+}
+
+// ---------- day/night ----------
+function setNight(on){
+  document.getElementById('btn-night').classList.toggle('on', on);
+  document.getElementById('btn-day').classList.toggle('on', !on);
+  if (on){
+    scene.background.set(0x05070e); scene.fog.color.set(0x05070e);
+    hemi.intensity=0.9; hemi.color.set(0x46547e); hemi.groundColor.set(0x161220);
+    moon.intensity=0.75; sun.intensity=0.0;
+    tealFill.intensity=90; amberFill.intensity=70;
+    shopLights.forEach(p=>p.intensity=26);
+    lampLights.forEach(p=>p.intensity=26);
+    renderer.toneMappingExposure=1.35;
+    window.__sp2sky.skyMat.map=window.__sp2sky.night;
+  } else {
+    scene.background.set(0x9fc3e8); scene.fog.color.set(0x9fc3e8);
+    hemi.intensity=1.25; hemi.color.set(0xbfd9ff); hemi.groundColor.set(0x6a7078);
+    moon.intensity=0.0; sun.intensity=3.6;
+    tealFill.intensity=0; amberFill.intensity=0;
+    shopLights.forEach(p=>p.intensity=0);
+    lampLights.forEach(p=>p.intensity=0);
+    renderer.toneMappingExposure=1.0;
+    window.__sp2sky.skyMat.map=window.__sp2sky.day;
+  }
+  window.__sp2sky.skyMat.needsUpdate=true;
+  applyDim(on);
+  window.__sp.night=on;
+}
+document.getElementById('btn-day').onclick=()=>setNight(false);
+document.getElementById('btn-night').onclick=()=>setNight(true);
+
+// ---------- orbit (showroom pattern) ----------
+const orbit={ theta:0.0, phi:1.62, radius:20, target:new THREE.Vector3(0,3,-18), auto:false };
+let dragging=false, px=0, py=0;
+canvas.addEventListener('pointerdown', e=>{ dragging=true; px=e.clientX; py=e.clientY; orbit.auto=false; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', e=>{
+  if(!dragging) return;
+  orbit.theta-=(e.clientX-px)*0.007;
+  orbit.phi=THREE.MathUtils.clamp(orbit.phi-(e.clientY-py)*0.007, 0.12, Math.PI-0.08);
+  px=e.clientX; py=e.clientY;
+});
+canvas.addEventListener('pointerup', ()=>{ dragging=false; });
+canvas.addEventListener('pointercancel', ()=>{ dragging=false; });
+canvas.addEventListener('wheel', e=>{
+  e.preventDefault();
+  orbit.radius=THREE.MathUtils.clamp(orbit.radius*(1+Math.sign(e.deltaY)*0.1), 4, 200);
+  orbit.auto=false;
+}, { passive:false });
+
+// street view: low on the road, vanishing point down the street under the overpass
+function streetView(){
+  orbit.target.set(0, 3.0, -30);
+  orbit.theta=0.0; orbit.phi=1.55; orbit.radius=26; orbit.auto=false;
+}
+function setView(theta, phi, radius, tx, ty, tz){
+  orbit.theta=theta; orbit.phi=phi; orbit.radius=radius;
+  orbit.target.set(tx,ty,tz); orbit.auto=false;
+}
+document.getElementById('btn-cam').onclick=streetView;
+
+function sizeRenderer(){
+  const w=window.innerWidth, h=window.innerHeight;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
+  renderer.setSize(w, h, false);
+  camera.aspect=w/h; camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', sizeRenderer);
+
+// ---------- assembly ----------
+function build(){
+  buildGround();
+  buildSkyline();
+  buildAirTrain();
+  buildTrain();
+  buildOverpass();
+  buildLamps();
+  buildPoles();
+  for(const b of TOWERS) makeTower(b);
+  vendingMachine(-10.9,-20, Math.PI/2, 31);
+  vendingMachine(-10.9,-21.4, Math.PI/2, 32);
+  vendingMachine(10.9,-68, -Math.PI/2, 33);
+  pedestrian(9.8,-16, 2.6, 0); pedestrian(10.2,-17.2, -0.8, 1);
+  pedestrian(-9.8,-31, 1.4, 2); pedestrian(9.8,-52, -1.2, 3);
+  pedestrian(-10.1,-64, 0.6, 4); pedestrian(10.0,-90, 0.2, 5);
+  car(-3.5,-24, 0.06, 0); car(3.2,-70, Math.PI-0.05, 1); car(-2.8,-96, -0.04, 2);
+  for(const [x,z] of [[-7.6,-43],[-7.2,-47],[7.6,-43],[7.2,-47]]){
+    const cone=new THREE.Mesh(new THREE.ConeGeometry(0.16,0.5,10),
+      new THREE.MeshStandardMaterial({ color:0xd8542a, roughness:0.7 }));
+    cone.position.set(x,0.4,z); cone.castShadow=true; scene.add(cone);
+    scene.add(box(0.34,0.05,0.34,MAT.plinth, x, 0.18, z));
+  }
+}
+
+const clock=new THREE.Clock();
+function loop(){
+  requestAnimationFrame(loop);
+  const t=clock.getElapsedTime();
+  // aviation beacons: ~1.5 s blink period
+  const bk=Math.sin(t*Math.PI*2/1.5)>0;
+  const dimK=window.__sp.night?1:0.40;
+  for(const b of beacons){
+    b.mat.color.copy(b.base).multiplyScalar((bk?1:0.10)*dimK);
+    if(b.halo) b.halo.opacity=bk?0.55*dimK:0.04*dimK;
+  }
+  updateTrains(t);
+  if (orbit.auto) orbit.theta+=0.003;
+  const sp=Math.sin(orbit.phi);
+  camera.position.set(
+    orbit.target.x+orbit.radius*sp*Math.sin(orbit.theta),
+    orbit.target.y+orbit.radius*Math.cos(orbit.phi),
+    orbit.target.z+orbit.radius*sp*Math.cos(orbit.theta));
+  camera.lookAt(orbit.target);
+  renderer.render(scene, camera);
+}
+
+window.__sp={ night:true, ready:false, setNight, streetView, setView, scene, camera,
+  state:()=>({ ready:window.__sp.ready, night:window.__sp.night,
+    objects:scene.children.length,
+    cam:camera.position.toArray().map(v=>+v.toFixed(2)) }) };
+
+sizeRenderer();
+build();            // creates window.__sp2sky before setNight touches it
+setNight(true);
+streetView();
+window.__sp.ready=true;
+statusEl.textContent='ready — downtown neon core · 10 towers · air-train loop · overpass';
+loop();
+</script>
+</body>
+</html>
