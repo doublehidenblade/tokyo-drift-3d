@@ -615,5 +615,17 @@ build().then(()=>{
 });
 loop();
 </script>
+<!-- TD cross-district nav (showroom update) -->
+<style>
+#tdnav{position:fixed;left:50%;bottom:12px;transform:translateX(-50%);z-index:20;display:flex;align-items:center;white-space:nowrap;background:rgba(8,10,16,.8);border:1px solid rgba(120,200,255,.28);border-radius:10px;padding:4px 6px;font:12px/1.4 system-ui,sans-serif;backdrop-filter:blur(6px);max-width:97vw;overflow-x:auto}
+#tdnav a{color:#9fd8ff;text-decoration:none;padding:4px 7px;border-radius:6px;opacity:.85;flex:0 0 auto}
+#tdnav a:hover{background:rgba(88,166,255,.2);opacity:1}
+#tdnav a.cur{background:rgba(88,166,255,.3);color:#fff;font-weight:700;opacity:1}
+#tdnav .sep{color:#445066;user-select:none;flex:0 0 auto}
+</style>
+<nav id="tdnav" aria-label="Tokyo Drift scenes"></nav>
+<script>
+(function(){var p=[["index.html","Game"],["districts.html","Dashboard"],["fh6-scene.html","Night Street"],["startplaza-scene.html","Start Plaza"],["district2-scene.html","Industrial Dock"],["south-ridge-scene.html","South Ridge"],["waterfront-east-scene.html","Waterfront East"],["the-climb-scene.html","The Climb"],["harborwest-scene.html","Harbor West"]];var cur=(location.pathname.split("/").pop()||"index.html").toLowerCase();var nav=document.getElementById("tdnav");var h="";for(var i=0;i<p.length;i++){if(i>0)h+='<span class="sep">\u00b7</span>';h+='<a href="'+p[i][0]+'"'+(p[i][0].toLowerCase()===cur?' class="cur"':'')+'>'+p[i][1]+"</a>";}nav.innerHTML=h;})();
+</script>
 </body>
 </html>
