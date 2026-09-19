@@ -163,8 +163,57 @@ function skyTexture(night){
     g.fillStyle='rgba(255,255,255,0.5)';
     for(let i=0;i<14;i++){ const x=rnd()*1024,y=40+rnd()*180; g.beginPath(); g.ellipse(x,y,40+rnd()*60,12+rnd()*10,0,0,7); g.fill(); }
   }
+  skylineBackdrop(g, night, 1024, 512);
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
   return t;
+}
+
+// distant harbor skyline painted into the sky (2D backdrop) — replaces the
+// 3D harbor blocks whose side-face UVs shear. Attractive mock-style: layered
+// silhouettes with lit windows and neon crowns, day/night variants.
+function skylineBackdrop(g, night, W, H){
+  const rnd = mulberry32(99);
+  const horizon = H*0.52; // sky sphere horizon: texture v=0.5 is eye level
+  // back layer: faint far towers
+  for(let i=0;i<46;i++){
+    const bw = 18+rnd()*36, bh = 40+rnd()*90;
+    const x = rnd()*W, y = horizon-bh;
+    g.fillStyle = night ? 'rgba(16,20,38,0.85)' : 'rgba(120,140,170,0.55)';
+    g.fillRect(x, y, bw, bh);
+    if(night){
+      for(let wy=y+6; wy<horizon-4; wy+=7)
+        for(let wx=x+3; wx<x+bw-3; wx+=6)
+          if(rnd()<0.42){ g.fillStyle=rnd()<0.75?'rgba(255,190,110,0.75)':'rgba(150,210,255,0.75)'; g.fillRect(wx,wy,2.6,3.4); }
+    } else {
+      g.fillStyle='rgba(255,255,255,0.35)';
+      for(let wy=y+6; wy<horizon-4; wy+=9)
+        for(let wx=x+4; wx<x+bw-4; wx+=9) g.fillRect(wx,wy,4,5);
+    }
+  }
+  // front layer: darker nearer blocks with neon crowns
+  for(let i=0;i<30;i++){
+    const bw = 26+rnd()*44, bh = 60+rnd()*110;
+    const x = rnd()*W, y = horizon-bh;
+    g.fillStyle = night ? '#0a0e1e' : 'rgba(80,100,135,0.8)';
+    g.fillRect(x, y, bw, bh);
+    if(night){
+      // neon crown strip
+      g.fillStyle = ['#ff2d78','#22d3ee','#ffb13d'][i%3];
+      g.fillRect(x, y, bw, 3);
+      for(let wy=y+10; wy<horizon-4; wy+=8)
+        for(let wx=x+4; wx<x+bw-4; wx+=7)
+          if(rnd()<0.5){ g.fillStyle=rnd()<0.7?'rgba(255,196,120,0.9)':'rgba(160,220,255,0.9)'; g.fillRect(wx,wy,3,4); }
+    } else {
+      g.fillStyle='rgba(230,240,250,0.5)';
+      for(let wy=y+10; wy<horizon-4; wy+=10)
+        for(let wx=x+5; wx<x+bw-5; wx+=10) g.fillRect(wx,wy,5,6);
+    }
+  }
+  // harbor glow band right at the horizon
+  const hg = g.createLinearGradient(0,horizon-26,0,horizon+8);
+  if(night){ hg.addColorStop(0,'rgba(255,45,120,0)'); hg.addColorStop(0.7,'rgba(255,45,120,0.20)'); hg.addColorStop(1,'rgba(34,211,238,0.12)'); }
+  else { hg.addColorStop(0,'rgba(255,255,255,0)'); hg.addColorStop(1,'rgba(255,255,255,0.25)'); }
+  g.fillStyle = hg; g.fillRect(0,horizon-26,W,34);
 }
 
 // ---------- lights ----------
@@ -495,6 +544,9 @@ async function build(){
   jobs.push(Promise.resolve(walls));
   const harbor = await place('cl-harbor.glb', 0, 0, 0);
   harbor.traverse(n=>{ if(n.isMesh){ n.material.fog = false; } });
+  // 3D harbor blocks hidden: side-face UVs shear (diagonal streaks). The
+  // painted 2D skyline backdrop in the sky texture replaces them.
+  harbor.visible = false;
   jobs.push(Promise.resolve(harbor));
 
   // houses / shops / sento — dress windows so the hillside feels lived-in

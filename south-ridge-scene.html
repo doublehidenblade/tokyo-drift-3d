@@ -132,6 +132,9 @@ function terrainH(x, z){
     damp = Math.min(damp, 0.25 + 0.75*ss01((ad-9)/11));   // rugged flanks further out
   const n = vnoise(x*0.045, z*0.045)*2.4 + vnoise(x*0.16, z*0.16)*0.8;
   h += n * damp * (0.35 + side*1.2);
+  // QA-fix: carve the tunnel bore — terrain must never fill the tube (was a solid green wall).
+  // Bore half-width 4.7, inner road deck at y=1.83: keep terrain below the deck inside.
+  if (z <= -28 && z >= -62 && ad < 5.6) h = Math.min(h, 1.5);
   return h;
 }
 
