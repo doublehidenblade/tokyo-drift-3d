@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Climb — 3D Diorama</title>
+<style>
+  @font-face{font-family:'ClimbKanji';src:url('./districts/the-climb/fonts/climb-kanji.woff2') format('woff2');font-weight:900;}
+  html,body{margin:0;padding:0;height:100%;background:#05070c;overflow:hidden}
+  #view{display:block;width:100vw;height:100vh;cursor:grab;touch-action:none}
+  #view:active{cursor:grabbing}
+  #hud{position:fixed;top:12px;left:14px;color:#fff;font:13px/1.5 system-ui,sans-serif;
+    text-shadow:0 1px 4px #000;pointer-events:none;z-index:5}
+  #hud b{font-size:15px;letter-spacing:.5px}
+  #bar{position:fixed;top:12px;right:14px;z-index:6;display:flex;gap:8px}
+  #bar button{background:rgba(20,24,32,.85);color:#fff;border:1px solid #3a4356;border-radius:8px;
+    padding:9px 14px;font-size:13px;cursor:pointer}
+  #bar button.on{background:#1c3a5e;border-color:#58a6ff}
+  #status{position:fixed;bottom:12px;left:14px;color:#9aa4b5;font:12px system-ui,sans-serif;
+    text-shadow:0 1px 3px #000;z-index:5}
+  #hint{position:fixed;bottom:12px;right:14px;color:#9aa4b5;font:12px system-ui,sans-serif;z-index:5}
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="hud"><b>The Climb — hillside night diorama</b><br><span id="sub">static scene · orbit showroom</span></div>
+<div id="bar">
+  <button id="btn-day">☀ Day</button>
+  <button id="btn-night" class="on">🌙 Night</button>
+  <button id="btn-cam">📷 Street view</button>
+</div>
+<div id="status">loading…</div>
+<div id="hint">drag to orbit · scroll to zoom</div>
+
+<script type="module">
+import * as THREE from './vendor/three.module.js';
+import { GLTFLoader } from './vendor/GLTFLoader.js';
+
+const MDIR = './districts/the-climb/models/';
+const statusEl = document.getElementById('status');
+
+const canvas = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.35;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x060a18);
+scene.fog = new THREE.Fog(0x060a18, 70, 230);
+
+const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 800);
+
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+function shade(hex,f){const n=parseInt(hex.slice(1),16);const r=Math.min(255,((n>>16)&255)*f)|0,g=Math.min(255,((n>>8)&255)*f)|0,b=Math.min(255,(n&255)*f)|0;return `rgb(${r},${g},${b})`;}
+
+// ---------- real-Japanese sign textures (subset Noto Serif CJK JP, always real glyphs) ----------
+const KANJI_FONT = '"ClimbKanji", serif';
+function kanjiTexture(word, bg, fg, seed, vertical=false){
+  const w = vertical?256:512, h = vertical?512:224;
+  const c = document.createElement('canvas'); c.width=w; c.height=h;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0,0,0,h);
+  grad.addColorStop(0, shade(bg,1.12)); grad.addColorStop(0.55, shade(bg,0.95)); grad.addColorStop(1, shade(bg,0.62));
+  g.fillStyle = grad; g.fillRect(0,0,w,h);
+  g.strokeStyle = fg; g.lineWidth = Math.max(3, w*0.025);
+  g.strokeRect(g.lineWidth, g.lineWidth, w-2*g.lineWidth, h-2*g.lineWidth);
+  g.fillStyle = fg; g.textAlign='center'; g.textBaseline='middle';
+  if(vertical){
+    const n = word.length, ch = (h*0.88)/n;
+    for(let i=0;i<n;i++){
+      g.font = `900 ${ch*0.62}px ${KANJI_FONT}`;
+      g.fillText(word[i], w*0.5, h*0.06 + ch*(i+0.5));
+    }
+  } else {
+    const n = word.length, cw = (w*0.84)/n;
+    for(let i=0;i<n;i++){
+      g.font = `900 ${Math.min(cw,h)*0.55}px ${KANJI_FONT}`;
+      g.fillText(word[i], w*0.08 + cw*(i+0.5), h*0.5);
+    }
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+  return t;
+}
+function neonTexture(word, color, seed){
+  const c = document.createElement('canvas'); c.width=512; c.height=160;
+  const g = c.getContext('2d');
+  g.clearRect(0,0,512,160);
+  g.textAlign='center'; g.textBaseline='middle';
+  g.font = `900 92px ${KANJI_FONT}`;
+  g.shadowColor = color; g.shadowBlur = 26;
+  g.fillStyle = color;
+  const n = word.length, cw = 400/n;
+  for(let i=0;i<n;i++) g.fillText(word[i], 56 + cw*(i+0.5), 84);
+  g.shadowBlur = 0; g.fillStyle = 'rgba(255,255,255,0.92)';
+  g.font = `900 92px ${KANJI_FONT}`;
+  for(let i=0;i<n;i++) g.fillText(word[i], 56 + cw*(i+0.5), 84);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+  return t;
+}
+function norenTexture(){
+  const c = document.createElement('canvas'); c.width=256; c.height=256;
+  const g = c.getContext('2d');
+  g.fillStyle = '#16286b'; g.fillRect(0,0,256,256);
+  g.fillStyle = 'rgba(255,255,255,0.85)';
+  for(let i=0;i<3;i++) g.fillRect(80+i*48, 200, 16, 56);
+  g.fillStyle = '#f4f1e6'; g.textAlign='center'; g.textBaseline='middle';
+  g.font = `900 150px ${KANJI_FONT}`;
+  g.fillText('湯', 128, 110);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+  return t;
+}
+function streakTexture(){
+  const c = document.createElement('canvas'); c.width=64; c.height=256;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0,0,0,256);
+  grad.addColorStop(0,'rgba(255,255,255,0.85)'); grad.addColorStop(1,'rgba(255,255,255,0)');
+  g.fillStyle = grad; g.fillRect(0,0,64,256);
+  const img = g.getImageData(0,0,64,256), d = img.data;
+  for(let y=0;y<256;y++) for(let x=0;x<64;x++){
+    const f = Math.sin(Math.PI*x/64);
+    d[(y*64+x)*4+3] *= f;
+  }
+  g.putImageData(img,0,0);
+  return new THREE.CanvasTexture(c);
+}
+function glowTexture(color){
+  const c = document.createElement('canvas'); c.width=256; c.height=256;
+  const g = c.getContext('2d');
+  const rg = g.createRadialGradient(128,128,4,128,128,128);
+  rg.addColorStop(0,color); rg.addColorStop(1,'rgba(0,0,0,0)');
+  g.fillStyle = rg; g.fillRect(0,0,256,256);
+  return new THREE.CanvasTexture(c);
+}
+function skyTexture(night){
+  const c = document.createElement('canvas'); c.width=1024; c.height=512;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0,0,0,512);
+  if(night){
+    grad.addColorStop(0,'#020409'); grad.addColorStop(0.45,'#0a1233');
+    grad.addColorStop(0.60,'#1d2a55'); grad.addColorStop(0.68,'#7a3a4a');
+    grad.addColorStop(0.72,'#3a2a44'); grad.addColorStop(0.76,'#141824');
+    grad.addColorStop(1,'#05070c');
+  } else {
+    grad.addColorStop(0,'#3f7fd0'); grad.addColorStop(0.6,'#9cc6ee');
+    grad.addColorStop(0.72,'#e8d9b8'); grad.addColorStop(1,'#b8c4cc');
+  }
+  g.fillStyle = grad; g.fillRect(0,0,1024,512);
+  const rnd = mulberry32(7);
+  if(night){
+    for(let i=0;i<420;i++){
+      const y = rnd()*300, x = rnd()*1024;
+      g.fillStyle = `rgba(255,255,255,${0.25+rnd()*0.6})`;
+      g.fillRect(x, y, rnd()<0.12?2:1, rnd()<0.12?2:1);
+    }
+    const mg = g.createRadialGradient(770,90,6,770,90,90);
+    mg.addColorStop(0,'rgba(235,242,255,1)'); mg.addColorStop(0.18,'rgba(225,235,255,0.95)');
+    mg.addColorStop(0.25,'rgba(200,215,255,0.35)'); mg.addColorStop(1,'rgba(200,215,255,0)');
+    g.fillStyle = mg; g.beginPath(); g.arc(770,90,90,0,7); g.fill();
+  } else {
+    g.fillStyle='rgba(255,255,255,0.5)';
+    for(let i=0;i<14;i++){ const x=rnd()*1024,y=40+rnd()*180; g.beginPath(); g.ellipse(x,y,40+rnd()*60,12+rnd()*10,0,0,7); g.fill(); }
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+// ---------- lights ----------
+const hemi = new THREE.HemisphereLight(0x35497a, 0x16121a, 1.0); scene.add(hemi);
+const moon = new THREE.DirectionalLight(0x9db8ff, 0.8);
+moon.position.set(-30, 55, 10); moon.castShadow = true;
+moon.shadow.mapSize.set(2048, 2048);
+moon.shadow.camera.left=-70; moon.shadow.camera.right=70;
+moon.shadow.camera.top=80; moon.shadow.camera.bottom=-40;
+moon.shadow.camera.far=240; moon.shadow.bias=-0.0004;
+scene.add(moon); scene.add(moon.target); moon.target.position.set(0,4,-10);
+const sun = new THREE.DirectionalLight(0xfff2dd, 0.0);
+sun.position.set(30, 50, 25); sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left=-70; sun.shadow.camera.right=70;
+sun.shadow.camera.top=80; sun.shadow.camera.bottom=-40;
+sun.shadow.camera.far=240; sun.shadow.bias=-0.0004;
+scene.add(sun); scene.add(sun.target); sun.target.position.set(0,4,-10);
+
+const lampPools = [];
+const shopLights = [];   // warm entrance lights that make shops read "open"
+const glowSprites = [];  // additive halo sprites, hidden by day
+const nightMats = [];    // {mat, night, day} emissive intensities toggled by setNight
+function regNight(mat, nightI, dayI=0.12){ nightMats.push({ mat, night:nightI, day:dayI }); return mat; }
+const glowTexWarm = glowTexture('rgba(255,170,90,0.85)');
+function addGlow(parent, x, y, z, scale, opacity=0.55){
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexWarm,
+    transparent:true, opacity, blending:THREE.AdditiveBlending, depthWrite:false, fog:false }));
+  s.position.set(x, y, z); s.scale.setScalar(scale);
+  parent.add(s); glowSprites.push(s); return s;
+}
+const harborPink = new THREE.PointLight(0xff2d78, 0, 90, 1.8);
+harborPink.position.set(-20, 8, 88); scene.add(harborPink);
+const harborCyan = new THREE.PointLight(0x22d3ee, 0, 90, 1.8);
+harborCyan.position.set(30, 6, 88); scene.add(harborCyan);
+const hillWash = new THREE.PointLight(0x6f9fff, 0, 110, 1.9);
+hillWash.position.set(45, 22, -20); scene.add(hillWash);
+const sentoGlow = new THREE.PointLight(0xff9a3e, 0, 24, 1.7); scene.add(sentoGlow);
+
+// ---------- sky + harbor glow ----------
+const skyMat = new THREE.MeshBasicMaterial({ map: skyTexture(true), side: THREE.BackSide, fog:false, depthWrite:false });
+const skyDome = new THREE.Mesh(new THREE.SphereGeometry(380, 32, 20), skyMat);
+skyDome.position.set(0, 0, 10); scene.add(skyDome);
+const daySkyTex = skyTexture(false), nightSkyTex = skyMat.map;
+
+const glowPink = new THREE.Mesh(new THREE.PlaneGeometry(150, 42),
+  new THREE.MeshBasicMaterial({ map: glowTexture('rgba(255,45,120,0.55)'), transparent:true,
+    opacity:0.8, blending:THREE.AdditiveBlending, depthWrite:false, fog:false,
+    side:THREE.DoubleSide }));
+glowPink.position.set(-25, 10, 108); scene.add(glowPink);
+const glowCyan = new THREE.Mesh(new THREE.PlaneGeometry(120, 34),
+  new THREE.MeshBasicMaterial({ map: glowTexture('rgba(34,211,238,0.5)'), transparent:true,
+    opacity:0.7, blending:THREE.AdditiveBlending, depthWrite:false, fog:false,
+    side:THREE.DoubleSide }));
+glowCyan.position.set(35, 8, 110); scene.add(glowCyan);
+
+function setNight(on){
+  document.getElementById('btn-night').classList.toggle('on', on);
+  document.getElementById('btn-day').classList.toggle('on', !on);
+  if (on){
+    scene.background.set(0x060a18); scene.fog.color.set(0x060a18);
+    hemi.intensity=1.0; hemi.color.set(0x35497a); hemi.groundColor.set(0x16121a);
+    moon.intensity=0.8; sun.intensity=0.0;
+    lampPools.forEach(p=>p.intensity=30); sentoGlow.intensity=26;
+    shopLights.forEach(p=>p.intensity=14);
+    glowSprites.forEach(s=>s.visible=true);
+    nightMats.forEach(e=>{ e.mat.emissiveIntensity = e.night; });
+    harborPink.intensity=55; harborCyan.intensity=45; hillWash.intensity=72;
+    glowPink.visible = glowCyan.visible = true;
+    renderer.toneMappingExposure=1.35;
+    skyMat.map = nightSkyTex;
+  } else {
+    scene.background.set(0x9fc3e8); scene.fog.color.set(0x9fc3e8);
+    hemi.intensity=1.1; hemi.color.set(0xbfd9ff); hemi.groundColor.set(0x6a7078);
+    moon.intensity=0.0; sun.intensity=2.6;
+    lampPools.forEach(p=>p.intensity=0); sentoGlow.intensity=0;
+    shopLights.forEach(p=>p.intensity=0);
+    glowSprites.forEach(s=>s.visible=false);
+    nightMats.forEach(e=>{ e.mat.emissiveIntensity = e.day; });
+    harborPink.intensity=0; harborCyan.intensity=0; hillWash.intensity=0;
+    glowPink.visible = glowCyan.visible = false;
+    renderer.toneMappingExposure=1.0;
+    skyMat.map = daySkyTex;
+  }
+  skyMat.needsUpdate = true;
+  window.__cl.night = on;
+}
+document.getElementById('btn-day').onclick = ()=>setNight(false);
+document.getElementById('btn-night').onclick = ()=>setNight(true);
+
+// ---------- inline orbit ----------
+const orbit = { theta:0.35, phi:1.22, radius:40, target:new THREE.Vector3(0,4,10), auto:false };
+let dragging=false, px=0, py=0;
+canvas.addEventListener('pointerdown', e=>{ dragging=true; px=e.clientX; py=e.clientY; orbit.auto=false; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', e=>{
+  if(!dragging) return;
+  orbit.theta -= (e.clientX-px)*0.007;
+  orbit.phi = THREE.MathUtils.clamp(orbit.phi-(e.clientY-py)*0.007, 0.12, Math.PI-0.08);
+  px=e.clientX; py=e.clientY;
+});
+canvas.addEventListener('pointerup', ()=>{ dragging=false; });
+canvas.addEventListener('pointercancel', ()=>{ dragging=false; });
+canvas.addEventListener('wheel', e=>{
+  e.preventDefault();
+  orbit.radius = THREE.MathUtils.clamp(orbit.radius*(1+Math.sign(e.deltaY)*0.1), 4, 220);
+  orbit.auto=false;
+}, { passive:false });
+
+let CL = [];   // centerline samples
+function roadPointAt(s){
+  if(!CL.length) return {x:0,y:0,z:0,tx:0,tz:1,nx:1,nz:0};
+  if(s<=0) return CL[0];
+  for(let k=1;k<CL.length;k++){
+    if(CL[k].s>=s){
+      const a=CL[k-1], b=CL[k], t=(s-a.s)/Math.max(1e-6,b.s-a.s);
+      const o={};
+      for(const kk of ['x','y','z','tx','tz','nx','nz']) o[kk]=a[kk]+(b[kk]-a[kk])*t;
+      return o;
+    }
+  }
+  return CL[CL.length-1];
+}
+function lookFrom(camPos, targetPos){
+  // derive orbit params from an explicit camera placement
+  const dx = camPos[0]-targetPos[0], dy = camPos[1]-targetPos[1], dz = camPos[2]-targetPos[2];
+  const r = Math.hypot(dx,dy,dz);
+  orbit.radius = r;
+  orbit.phi = Math.acos(THREE.MathUtils.clamp(dy/r,-1,1));
+  orbit.theta = Math.atan2(dx, dz);
+  orbit.target.set(targetPos[0], targetPos[1], targetPos[2]);
+  orbit.auto = false;
+}
+function streetView(){
+  // the money composition: low on the road mid-hill, looking down the winding
+  // street toward the neon harbor glow
+  const T = roadPointAt(42), C = roadPointAt(70);
+  lookFrom([C.x - C.tx*4, C.y + 4.5, C.z - C.tz*4], [T.x, T.y + 2.2, T.z]);
+}
+function setView(theta, phi, radius, tx, ty, tz){
+  orbit.theta=theta; orbit.phi=phi; orbit.radius=radius;
+  orbit.target.set(tx,ty,tz); orbit.auto=false;
+}
+document.getElementById('btn-cam').onclick = streetView;
+
+function sizeRenderer(){
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
+  renderer.setSize(w, h, false);
+  camera.aspect = w/h; camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', sizeRenderer);
+
+// ---------- assembly ----------
+const loader = new GLTFLoader();
+const cache = new Map();
+function loadGLB(file){
+  if (cache.has(file)) return cache.get(file);
+  const p = new Promise((res, rej)=>loader.load(MDIR+file, gltf=>res(gltf), undefined, rej));
+  cache.set(file, p); return p;
+}
+async function place(file, x, y, z, rotY=0, scale=1){
+  const gltf = await loadGLB(file);
+  const o = gltf.scene.clone(true);
+  o.position.set(x, y, z); o.rotation.y = rotY; o.scale.setScalar(scale);
+  o.traverse(n=>{ if(n.isMesh){ n.castShadow=true; n.receiveShadow=true; } });
+  scene.add(o); return o;
+}
+
+const wireMat = new THREE.MeshBasicMaterial({ color:0x050507 });
+function catenary(a, b, sag, radius=0.025){
+  const mid = new THREE.Vector3().addVectors(a,b).multiplyScalar(0.5); mid.y -= sag;
+  const curve = new THREE.QuadraticBezierCurve3(a, mid, b);
+  const mesh = new THREE.Mesh(new THREE.TubeGeometry(curve, 20, radius, 6), wireMat);
+  scene.add(mesh); return mesh;
+}
+const streakTex = streakTexture();
+function roadStreak(x, y, z, tx, tz, tint, len=9, wid=1.7, op=0.32){
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(wid, len),
+    new THREE.MeshBasicMaterial({ map: streakTex, color: tint, transparent:true,
+      opacity: op, blending: THREE.AdditiveBlending, depthWrite:false }));
+  m.rotation.order = 'YXZ';
+  m.rotation.y = Math.atan2(tx, tz);
+  m.rotation.x = -Math.PI/2;
+  m.position.set(x, y, z);
+  scene.add(m);
+}
+
+const KANBAN_FILES = {
+  'cl-kanban-red.glb': 0, 'cl-kanban-orange.glb': 1, 'cl-kanban-green.glb': 2,
+};
+function applyKanbanTexture(obj, word, bg, fg, seed){
+  const tex = kanjiTexture(word, bg, fg, seed, true);
+  const faceMat = new THREE.MeshStandardMaterial({
+    map: tex, emissive: 0xffffff, emissiveMap: tex,
+    emissiveIntensity: 1.15, roughness: 0.55, metalness: 0.0,
+  });
+  const frameMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(bg).multiplyScalar(0.35), roughness: 0.6 });
+  obj.traverse(n=>{
+    if(!n.isMesh || !n.material || !n.material.name) return;
+    const nm = n.material.name;
+    if(nm.includes('_sign_red') || nm.includes('_sign_or') || nm.includes('_sign_grn')){
+      n.geometry.computeBoundingBox();
+      const bb = n.geometry.boundingBox;
+      const w = bb.max.z - bb.min.z, h = bb.max.y - bb.min.y;
+      const cy = (bb.max.y + bb.min.y) / 2;
+      n.material = frameMat;
+      // two unmirrored faces so the vertical kanji reads correctly from both sides
+      for(const s of [1, -1]){
+        const p = new THREE.Mesh(new THREE.PlaneGeometry(w, h), faceMat);
+        p.rotation.y = s * Math.PI / 2;
+        p.position.set(s * 0.035, cy, (bb.max.z + bb.min.z) / 2);
+        obj.add(p);
+      }
+    }
+  });
+}
+function paintNoren(obj){
+  const tex = norenTexture();
+  obj.traverse(n=>{
+    if(n.isMesh && n.material && n.material.name &&
+       (n.material.name.includes('_noren') || n.material.name === 'CL_noren')){
+      // backlit curtain: glows warm from the interior behind it, like a real open shop
+      n.material = regNight(new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85,
+        side: THREE.DoubleSide, emissive: 0xfff2dd, emissiveMap: tex,
+        emissiveIntensity: 0.55 }), 0.55, 0.0);
+    }
+  });
+}
+const SHOP_WORDS = [['ラーメン','#14161c','#ffd9a0'], ['そば','#101418','#e8f4ff'], ['寿司','#161014','#ff9a9a']];
+function paintSignboard(obj, idx){
+  const [word, bg, fg] = SHOP_WORDS[idx % SHOP_WORDS.length];
+  const tex = kanjiTexture(word, bg, fg, 50+idx, false);
+  obj.traverse(n=>{
+    if(n.isMesh && n.material && n.material.name === 'CL_signboard'){
+      n.material = new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff,
+        emissiveMap: tex, emissiveIntensity: 1.3, roughness: 0.6 });
+    }
+  });
+}
+function hexA(hex, a){
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+}
+function neonSign(word, color, seed){
+  const tex = neonTexture(word, color, seed);
+  const grp = new THREE.Group();
+  const w = 1.1 + word.length*0.85;
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(w, 1.6),
+    new THREE.MeshBasicMaterial({ map: tex, transparent:true, depthWrite:false, fog:false }));
+  face.position.z = 0.02; grp.add(face);
+  const halo = new THREE.Mesh(new THREE.PlaneGeometry(w*1.7, 2.6),
+    new THREE.MeshBasicMaterial({ map: glowTexture(hexA(color, 0.35)),
+      transparent:true, opacity:0.55, blending:THREE.AdditiveBlending, depthWrite:false, fog:false }));
+  halo.position.z = -0.03; grp.add(halo);
+  const backing = new THREE.Mesh(new THREE.BoxGeometry(w+0.15, 1.75, 0.08),
+    new THREE.MeshStandardMaterial({ color:0x0a0a0c, roughness:0.7 }));
+  backing.position.z = -0.10; grp.add(backing);
+  return grp;
+}
+
+// ---------- lived-in windows (ghost-town fix) ----------
+// Houses ship with CL_win_warm / CL_win_dim / CL_win_dark materials, but most
+// windows are authored dark. Per instance we re-roll them: most houses get warm
+// lit windows with variation, a few stay dark.
+const winBase = {};
+let warmWinVariants = [], dimWinMat = null, darkWinMat = null, houseLampMat = null;
+function harvestWinMats(proto){
+  proto.scene.traverse(n=>{
+    const ms = n.isMesh ? (Array.isArray(n.material)?n.material:[n.material]) : [];
+    for(const m of ms) if(m && m.name && !(m.name in winBase)) winBase[m.name]=m;
+  });
+  const rnd = mulberry32(20260919);
+  warmWinVariants = [];
+  for(let i=0;i<4;i++){
+    const m = winBase['CL_win_warm'].clone();
+    m.emissive = m.emissive.clone();
+    m.emissive.offsetHSL((rnd()-0.5)*0.035, (rnd()-0.5)*0.08, (rnd()-0.5)*0.05);
+    regNight(m, 1.25 + i*0.2, 0.1);
+    m.emissiveIntensity = 1.25 + i*0.2;
+    warmWinVariants.push(m);
+  }
+  dimWinMat = winBase['CL_win_dim'].clone();
+  regNight(dimWinMat, 1.0, 0.1); dimWinMat.emissiveIntensity = 1.0;
+  darkWinMat = winBase['CL_win_dark'];
+  houseLampMat = winBase['CL_lamp'].clone();
+  regNight(houseLampMat, 2.2, 0.15); houseLampMat.emissiveIntensity = 2.2;
+}
+function pickWarm(rnd){ return warmWinVariants[(rnd()*warmWinVariants.length)|0]; }
+function dressWindows(obj, seed, litRatio){
+  const rnd = mulberry32(seed);
+  obj.traverse(n=>{
+    if(!n.isMesh) return;
+    const arr = Array.isArray(n.material);
+    const ms = arr ? n.material : [n.material];
+    let ch = false;
+    const out = ms.map(m=>{
+      if(!m || !m.name) return m;
+      const nm = m.name;
+      if(nm==='CL_win_warm'){ ch=true; return pickWarm(rnd); }
+      if(nm==='CL_win_dim'){ ch=true; return rnd()<litRatio ? pickWarm(rnd) : dimWinMat; }
+      if(nm==='CL_win_dark'){ ch=true; return rnd()<litRatio ? pickWarm(rnd) : darkWinMat; }
+      if(nm==='CL_lamp'){ ch=true; return houseLampMat; }
+      return m;
+    });
+    if(ch) n.material = arr ? out : out[0];
+  });
+}
+
+async function build(){
+  await document.fonts.load('900 100px "ClimbKanji"', '湯');
+  const [plc, cl] = await Promise.all([
+    fetch('./districts/the-climb/models/placements.json').then(r=>r.json()),
+    fetch('./districts/the-climb/models/centerline.json').then(r=>r.json()),
+  ]);
+  CL = cl;
+  const jobs = [];
+
+  // terrain + road + markings + walls + harbor (all world-space already)
+  jobs.push(place('cl-terrain.glb', 0, 0, 0));
+  const road = await place('cl-road.glb', 0, 0, 0);
+  road.traverse(n=>{
+    if(n.isMesh && n.material && /asphalt/i.test(n.material.name||'')) n.material.roughness = 0.30;
+  });
+  jobs.push(Promise.resolve(road));
+  jobs.push(place('cl-roadmarkings.glb', 0, 0, 0));
+  const walls = await place('cl-retwalls.glb', 0, 0, 0);
+  walls.traverse(n=>{ if(n.isMesh){ n.castShadow=false; n.receiveShadow=true; } });
+  jobs.push(Promise.resolve(walls));
+  const harbor = await place('cl-harbor.glb', 0, 0, 0);
+  harbor.traverse(n=>{ if(n.isMesh){ n.material.fog = false; } });
+  jobs.push(Promise.resolve(harbor));
+
+  // houses / shops / sento — dress windows so the hillside feels lived-in
+  harvestWinMats(await loadGLB('cl-house-a.glb'));
+  const darkHouses = new Set([3, 8, 12]); // a few houses stay dark; the rest glow warm
+  plc.houses.forEach((h, i)=>{
+    jobs.push(place(`cl-house-${h.variant}.glb`, h.x, h.y, h.z, h.rotY).then(o=>{
+      dressWindows(o, 5000 + i*131, darkHouses.has(i) ? 0.12 : 0.78);
+      return o;
+    }));
+  });
+  let si = 0;
+  for(const s of plc.shops){
+    jobs.push(place('cl-shop.glb', s.x, s.y, s.z, s.rotY).then(o=>{
+      paintSignboard(o, si); paintNoren(o);
+      dressWindows(o, 9000 + si*131, 1.0); // shops are open: every window lit
+      // brighter interior glow behind the storefront (per instance: materials are
+      // shared from the GLB cache, so every shop clones its own)
+      o.traverse(n=>{
+        if(n.isMesh){
+          const ms = Array.isArray(n.material)?n.material:[n.material];
+          ms.forEach(m=>{
+            if(m && m.name==='CL_interior'){
+              const c = m.clone(); regNight(c, 1.9, 0.15); c.emissiveIntensity = 1.9;
+              if(Array.isArray(n.material)) n.material[n.material.indexOf(m)] = c; else n.material = c;
+            }
+          });
+        }
+      });
+      // warm entrance light spilling out of the noren doorway
+      const fx = Math.sin(s.rotY), fz = Math.cos(s.rotY);
+      const el = new THREE.PointLight(0xffb46b, 14, 11, 1.8);
+      el.position.set(s.x + fx*2.4, s.y + 2.4, s.z + fz*2.4);
+      scene.add(el); shopLights.push(el);
+      addGlow(scene, s.x + fx*2.4, s.y + 2.6, s.z + fz*2.4, 3.2, 0.5);
+      si++; return o;
+    }));
+  }
+  if(plc.sento){
+    const sn = plc.sento;
+    jobs.push(place('cl-sento.glb', sn.x, sn.y, sn.z, sn.rotY).then(o=>{
+      paintNoren(o);
+      // stone lanterns + storefront glow: the sento is open for the evening bath
+      const boost = (name, nightI)=>{
+        o.traverse(n=>{
+          if(n.isMesh){
+            const ms = Array.isArray(n.material)?n.material:[n.material];
+            ms.forEach(m=>{
+              if(m && m.name===name && !m.userData.boosted){
+                m.userData.boosted = true;
+                const c = m.clone(); regNight(c, nightI, 0.12); c.emissiveIntensity = nightI;
+                if(Array.isArray(n.material)) n.material[n.material.indexOf(m)] = c; else n.material = c;
+              }
+            });
+          }
+        });
+      };
+      boost('bt-cl-sento_lantern', 1.7); boost('bt-cl-sento_lanternr', 1.7);
+      boost('bt-cl-sento_ish_glow', 2.0); boost('bt-cl-sento_store', 1.2);
+      // halo sprites riding exactly on the lantern fixtures (never floating)
+      o.traverse(n=>{
+        if(n.name==='bt-cl-sento_lant-1' || n.name==='bt-cl-sento_lant1') addGlow(n, 0, 0.1, 0, 1.6, 0.5);
+        if(n.name==='bt-cl-sento_ish_glow') addGlow(n, 0, 0, 0, 1.2, 0.45);
+      });
+      return o;
+    }));
+    sentoGlow.position.set(sn.x, sn.y+3.5, sn.z);
+  }
+
+  // kanban blade signs (mounted perpendicular, arms into facades)
+  for(const k of plc.kanban)
+    jobs.push(place(k.file, k.x, k.y, k.z, k.rotY).then(o=>{ applyKanbanTexture(o, k.word, k.bg, k.fg, k.seed); return o; }));
+
+  // neon wall signs on the harbor commercial strip
+  for(const nz of plc.neon){
+    const grp = neonSign(nz.word, nz.color, nz.seed);
+    grp.position.set(nz.x, nz.y, nz.z);
+    grp.rotation.y = nz.rotY;
+    scene.add(grp);
+  }
+
+  // street lamps + pools of light + wet-road streaks
+  let lampBulbBoosted = false;
+  for(const L of plc.lamps){
+    jobs.push(place('cl-lamp.glb', L.x, L.y, L.z, L.rotY).then(o=>{
+      // halo sprite riding exactly on the bulb fixture (never floating) + brighter bulb
+      o.traverse(n=>{
+        if(n.name==='bt-cl-lamp_bulb') addGlow(n, 0, 0, 0, 2.4, 0.5);
+        if(n.isMesh && n.material && n.material.name==='bt-cl-lamp_lamplit' && !lampBulbBoosted){
+          lampBulbBoosted = true;
+          regNight(n.material, 2.0, 0.15); n.material.emissiveIntensity = 2.0;
+        }
+      });
+      return o;
+    }));
+    const hx = L.x + 1.42*Math.cos(L.rotY), hz = L.z - 1.42*Math.sin(L.rotY);
+    const p = new THREE.PointLight(0xffb45e, 0, 34, 1.7);
+    p.position.set(hx, L.y+5.3, hz); scene.add(p); lampPools.push(p);
+    // streak on the road below, oriented along the road tangent
+    let best = CL[0], bd = 1e9;
+    for(const c of CL){ const d=(c.x-L.x)**2+(c.z-L.z)**2; if(d<bd){bd=d;best=c;} }
+    roadStreak(best.x, best.y+0.16, best.z, best.tx, best.tz, 0xffb45e, 9, 1.7, 0.34);
+    const pool = new THREE.Mesh(new THREE.CircleGeometry(2.4, 24),
+      new THREE.MeshBasicMaterial({ color:0xffb45e, transparent:true, opacity:0.15,
+        blending:THREE.AdditiveBlending, depthWrite:false }));
+    pool.rotation.x = -Math.PI/2; pool.position.set(hx, best.y+0.15, hz); scene.add(pool);
+  }
+  // harbor glow streaks on the water
+  for(const [x,z,c,op] of [[-20,72,0xff2d78,0.35],[30,74,0x22d3ee,0.30],[0,70,0xffb020,0.22]]){
+    roadStreak(x, -1.35, z, 0, 1, c, 26, 7, op);
+  }
+
+  // utility poles + catenary wires
+  for(const P of plc.poles) jobs.push(place('cl-pole.glb', P.x, P.y, P.z));
+  const V = (x,y,z)=>new THREE.Vector3(x,y,z);
+  for(let i=0;i<plc.poles.length-1;i++){
+    const A=plc.poles[i], B=plc.poles[i+1];
+    for(const dx of [-0.85, 0.85])
+      catenary(V(A.x+dx, A.y+7.5, A.z), V(B.x+dx, B.y+7.5, B.z), 1.2);
+  }
+
+  // pines / rocks / stairs
+  for(const P of plc.pines) jobs.push(place('cl-pine.glb', P.x, P.y, P.z, P.rotY, P.s));
+  for(const R of plc.rocks) jobs.push(place('cl-rock.glb', R.x, R.y, R.z));
+  for(const St of plc.stairs) jobs.push(place('cl-stairs.glb', St.x, St.y, St.z, St.rotY));
+
+  // parked sedan, cones, pedestrians
+  if(plc.sedan){ const sd=plc.sedan; jobs.push(place('cl-sedan.glb', sd.x, sd.y, sd.z, sd.rotY)); }
+  for(const C of plc.cones) jobs.push(place('cl-cone.glb', C.x, C.y, C.z));
+  for(const P of plc.peds) jobs.push(place('cl-ped.glb', P.x, P.y, P.z, P.rotY));
+
+  let done = 0; const total = jobs.length;
+  for(const j of jobs){ await j; done++; statusEl.textContent = `loading ${done}/${total}`; }
+}
+
+function loop(){
+  requestAnimationFrame(loop);
+  if (orbit.auto) orbit.theta += 0.003;
+  const sp = Math.sin(orbit.phi);
+  camera.position.set(
+    orbit.target.x + orbit.radius*sp*Math.sin(orbit.theta),
+    orbit.target.y + orbit.radius*Math.cos(orbit.phi),
+    orbit.target.z + orbit.radius*sp*Math.cos(orbit.theta));
+  camera.lookAt(orbit.target);
+  renderer.render(scene, camera);
+}
+
+window.__cl = { night:true, ready:false, setNight, streetView, setView, scene, camera,
+  state:()=>({ ready:window.__cl.ready, night:window.__cl.night,
+    objects: scene.children.length,
+    cam: camera.position.toArray().map(v=>+v.toFixed(2)) }) };
+
+sizeRenderer();
+setNight(true);
+build().then(()=>{
+  streetView();
+  setNight(window.__cl.night); // re-apply: lamps/materials/sprites registered during build
+  window.__cl.ready = true;
+  statusEl.textContent = 'ready — the climb v2 · static diorama';
+}).catch(err=>{
+  statusEl.textContent = 'LOAD ERROR: ' + (err.message||err);
+  window.__cl.error = String(err);
+});
+loop();
+</script>
+</body>
+</html>

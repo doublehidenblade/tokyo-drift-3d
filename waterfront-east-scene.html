@@ -1,0 +1,921 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Waterfront East — Night Bayshore Expressway · 3D Diorama</title>
+<style>
+  @font-face{
+    font-family:'SignJP';
+    src:url('./districts/waterfront-east/fonts/jp-signs.woff2') format('woff2');
+    font-weight:700; font-display:swap;
+  }
+  html,body{margin:0;padding:0;height:100%;background:#05070c;overflow:hidden}
+  #view{display:block;width:100vw;height:100vh;cursor:grab;touch-action:none}
+  #view:active{cursor:grabbing}
+  #hud{position:fixed;top:12px;left:14px;color:#fff;font:13px/1.5 system-ui,sans-serif;
+    text-shadow:0 1px 4px #000;pointer-events:none;z-index:5}
+  #hud b{font-size:15px;letter-spacing:.5px}
+  #bar{position:fixed;top:12px;right:14px;z-index:6;display:flex;gap:8px}
+  #bar button{background:rgba(20,24,32,.85);color:#fff;border:1px solid #3a4356;border-radius:8px;
+    padding:9px 14px;font-size:13px;cursor:pointer}
+  #bar button.on{background:#1c3a5e;border-color:#58a6ff}
+  #status{position:fixed;bottom:12px;left:14px;color:#9aa4b5;font:12px system-ui,sans-serif;
+    text-shadow:0 1px 3px #000;z-index:5}
+  #hint{position:fixed;bottom:12px;right:14px;color:#9aa4b5;font:12px system-ui,sans-serif;z-index:5}
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="hud"><b>Waterfront East — night bayshore expressway</b><br><span id="sub">static scene · orbit showroom</span></div>
+<div id="bar">
+  <button id="btn-day">☀ Day</button>
+  <button id="btn-night" class="on">🌙 Night</button>
+  <button id="btn-cam">📷 Street view</button>
+</div>
+<div id="status">loading…</div>
+<div id="hint">drag to orbit · scroll to zoom</div>
+
+<script type="module">
+import * as THREE from './vendor/three.module.js';
+
+const statusEl = document.getElementById('status');
+const q = new URLSearchParams(location.search);
+const LOWFX = q.get('fx') === 'low';
+const SHOT = q.get('shot') === '1';
+
+// ---------- road curve: right-hand arc, R=190, deck at y=8 ----------
+const R = 190, DECK = 8, ROAD_W = 17, TH0 = -0.30, TH1 = 0.70;
+const P  = th => new THREE.Vector3(R*Math.sin(th), DECK, R*(Math.cos(th)-1));
+const TAN= th => new THREE.Vector3(Math.cos(th), 0, -Math.sin(th));       // unit, toward +th
+const NRM= th => new THREE.Vector3(Math.sin(th), 0,  Math.cos(th));       // unit, toward circle center (inner/right)
+
+// ---------- seeded prng ----------
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+function shade(hex,f){const n=parseInt(hex.slice(1),16);const r=Math.min(255,((n>>16)&255)*f)|0,g=Math.min(255,((n>>8)&255)*f)|0,b=Math.min(255,(n&255)*f)|0;return `rgb(${r},${g},${b})`;}
+
+// ---------- renderer / scene ----------
+const canvas = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.38;
+renderer.shadowMap.enabled = !LOWFX;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x060a18);
+scene.fog = new THREE.Fog(0x060a18, 130, 470);
+
+const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 1400);
+
+// ---------- procedural canvas textures ----------
+function streakTexture(){
+  const c = document.createElement('canvas'); c.width=64; c.height=256;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0,0,0,256);
+  grad.addColorStop(0,'rgba(255,255,255,0.9)'); grad.addColorStop(1,'rgba(255,255,255,0)');
+  g.fillStyle = grad; g.fillRect(0,0,64,256);
+  const img = g.getImageData(0,0,64,256), d = img.data;
+  for(let y=0;y<256;y++) for(let x=0;x<64;x++){
+    const f = Math.sin(Math.PI*x/64);
+    d[(y*64+x)*4+3] *= f;
+  }
+  g.putImageData(img,0,0);
+  return new THREE.CanvasTexture(c);
+}
+function glowTexture(){
+  const c = document.createElement('canvas'); c.width=128; c.height=128;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(64,64,2,64,64,62);
+  grad.addColorStop(0,'rgba(255,255,255,1)'); grad.addColorStop(0.25,'rgba(255,255,255,0.5)');
+  grad.addColorStop(1,'rgba(255,255,255,0)');
+  g.fillStyle = grad; g.fillRect(0,0,128,128);
+  return new THREE.CanvasTexture(c);
+}
+function asphaltTexture(){
+  const c = document.createElement('canvas'); c.width=256; c.height=256;
+  const g = c.getContext('2d'), rnd = mulberry32(4);
+  g.fillStyle = '#3d434b'; g.fillRect(0,0,256,256);
+  for(let i=0;i<2600;i++){
+    const v = 55+rnd()*45;
+    g.fillStyle = `rgb(${v|0},${(v*1.05)|0},${(v*1.18)|0})`;
+    g.fillRect(rnd()*256, rnd()*256, 1.6, 1.6);
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
+function skyTexture(night){
+  const c = document.createElement('canvas'); c.width=1024; c.height=512;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0,0,0,512);
+  if(night){
+    grad.addColorStop(0,'#010209'); grad.addColorStop(0.42,'#0a1330');
+    grad.addColorStop(0.60,'#182448'); grad.addColorStop(0.68,'#b06a24');
+    grad.addColorStop(0.72,'#2a2036'); grad.addColorStop(1,'#05070c');
+  } else {
+    grad.addColorStop(0,'#3f7fd0'); grad.addColorStop(0.6,'#9cc6ee');
+    grad.addColorStop(0.72,'#e8d9b8'); grad.addColorStop(1,'#b8c4cc');
+  }
+  g.fillStyle = grad; g.fillRect(0,0,1024,512);
+  const rnd = mulberry32(21);
+  if(night){
+    for(let i=0;i<380;i++){
+      const y = rnd()*290, x = rnd()*1024;
+      g.fillStyle = `rgba(255,255,255,${0.25+rnd()*0.6})`;
+      g.fillRect(x, y, rnd()<0.12?2:1, rnd()<0.12?2:1);
+    }
+  } else {
+    g.fillStyle='rgba(255,255,255,0.5)';
+    for(let i=0;i<14;i++){ const x=rnd()*1024,y=40+rnd()*180; g.beginPath(); g.ellipse(x,y,40+rnd()*60,12+rnd()*10,0,0,7); g.fill(); }
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+// distant towers across the bay (cool windows, dark silhouettes)
+function baySkylineTexture(){
+  const c = document.createElement('canvas'); c.width=2048; c.height=256;
+  const g = c.getContext('2d'), rnd = mulberry32(31);
+  g.clearRect(0,0,2048,256);
+  let x = 0;
+  while(x < 2048){
+    const bw = 50+rnd()*120, bh = 70+rnd()*150;
+    g.fillStyle = '#04060c'; g.fillRect(x, 256-bh, bw, bh);
+    for(let wy=256-bh+9; wy<246; wy+=13) for(let wx=x+6; wx<x+bw-6; wx+=11){
+      if(rnd()<0.38){
+        const warm = rnd()<0.35;
+        g.fillStyle = warm?`rgba(255,${170+rnd()*40|0},95,0.9)`:`rgba(150,200,255,0.85)`;
+        g.fillRect(wx, wy, 5, 7);
+      }
+    }
+    if(rnd()<0.45){ g.fillStyle='#ff2222'; g.fillRect(x+bw/2-2, 256-bh-7, 4, 4); }
+    x += bw + rnd()*40;
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+// tower facade: dark concrete + randomized lit windows (warm/cool)
+function towerTexture(seed, warmRatio){
+  const c = document.createElement('canvas'); c.width=256; c.height=512;
+  const g = c.getContext('2d'), rnd = mulberry32(seed);
+  g.fillStyle = '#0a0e16'; g.fillRect(0,0,256,512);
+  for(let wy=14; wy<500; wy+=26){
+    const floorDark = rnd() < 0.14; // a few fully-dark floors for variation
+    for(let wx=12; wx<244; wx+=22){
+      if(!floorDark && rnd()<0.68){ // most windows lit (anti ghost-town)
+        const warm = rnd()<warmRatio;
+        g.fillStyle = warm?`rgba(255,${168+rnd()*42|0},92,0.95)`:`rgba(150,198,255,0.9)`;
+        g.fillRect(wx, wy, 13, 15);
+      } else {
+        g.fillStyle = 'rgba(20,28,42,0.9)'; g.fillRect(wx, wy, 13, 15);
+      }
+    }
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+// ---------- Japanese sign textures (real glyphs via embedded subset font) ----------
+const SIGN_FONT = '"SignJP","Noto Sans CJK JP",sans-serif';
+async function ensureSignFont(){
+  try{
+    await Promise.race([
+      Promise.all([
+        document.fonts.load('700 100px "SignJP"', '東京方面お台場'),
+        document.fonts.load('700 100px "SignJP"', '首都高速C1横浜大井'),
+      ]),
+      new Promise(res=>setTimeout(res, 4000)),
+    ]);
+  }catch(e){ /* fall back to system CJK font */ }
+}
+function drawArrow(g, x, y, s, kind, color){
+  // kind: 'up' | 'upright' — white highway arrow
+  g.save(); g.translate(x, y);
+  if(kind==='upright') g.rotate(Math.PI/4);
+  g.fillStyle = color;
+  const w = s*0.30;
+  g.fillRect(-w/2, -s*0.28, w, s*0.72);                    // shaft
+  g.beginPath();                                           // head
+  g.moveTo(0, -s*0.62); g.lineTo(s*0.34, -s*0.10); g.lineTo(-s*0.34, -s*0.10);
+  g.closePath(); g.fill();
+  g.restore();
+}
+// blue overhead panel: [{text, sub, arrow}] — one row per entry
+function gantryPanelTexture(entries, w=1024, h=256){
+  const c = document.createElement('canvas'); c.width=w; c.height=h;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0,0,0,h);
+  grad.addColorStop(0,'#0d49ad'); grad.addColorStop(0.55,'#0a3a8c'); grad.addColorStop(1,'#072a68');
+  g.fillStyle = grad; g.fillRect(0,0,w,h);
+  g.strokeStyle = '#eef3ff'; g.lineWidth = 7; g.strokeRect(10,10,w-20,h-20);
+  const n = entries.length, rh = h/n;
+  g.fillStyle = '#ffffff'; g.textBaseline = 'middle';
+  entries.forEach((e,i)=>{
+    const cy = rh*(i+0.5);
+    if(e.sub){
+      g.textAlign='left'; g.font = `700 ${rh*0.44|0}px ${SIGN_FONT}`;
+      g.fillText(e.text, 36, cy - rh*0.16);
+      g.font = `700 ${rh*0.26|0}px ${SIGN_FONT}`;
+      g.fillStyle = '#cfe0ff'; g.fillText(e.sub, 38, cy + rh*0.24); g.fillStyle = '#ffffff';
+    } else {
+      g.textAlign='left'; g.font = `700 ${rh*0.52|0}px ${SIGN_FONT}`;
+      g.fillText(e.text, 36, cy);
+    }
+    if(e.arrow) drawArrow(g, w-110, cy, rh*0.62, e.arrow, '#ffffff');
+    if(i<n-1){ g.fillStyle='rgba(255,255,255,0.35)'; g.fillRect(24, rh*(i+1)-2, w-48, 4); g.fillStyle='#ffffff'; }
+  });
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+  return t;
+}
+// green Shuto route badge
+function routeBadgeTexture(){
+  const c = document.createElement('canvas'); c.width=512; c.height=160;
+  const g = c.getContext('2d');
+  g.fillStyle = '#0a7a3d'; g.fillRect(0,0,512,160);
+  g.strokeStyle = '#ffffff'; g.lineWidth = 8; g.strokeRect(10,10,492,140);
+  g.fillStyle = '#ffffff'; g.textAlign='center'; g.textBaseline='middle';
+  g.font = `700 92px ${SIGN_FONT}`;
+  g.fillText('湾岸線', 256, 84);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+  return t;
+}
+// blue Shuto route shield: 首都高速 / C1 (as in the approved mock)
+function routeShieldTexture(){
+  const c = document.createElement('canvas'); c.width=256; c.height=320;
+  const g = c.getContext('2d');
+  // shield: rounded top, straight sides, pointed bottom
+  g.beginPath();
+  g.moveTo(24, 8); g.lineTo(232, 8);
+  g.quadraticCurveTo(246, 8, 246, 22);
+  g.lineTo(246, 190); g.lineTo(128, 312); g.lineTo(10, 190); g.lineTo(10, 22);
+  g.quadraticCurveTo(10, 8, 24, 8); g.closePath();
+  const grad = g.createLinearGradient(0,0,0,320);
+  grad.addColorStop(0,'#0e4eb4'); grad.addColorStop(1,'#083073');
+  g.fillStyle = grad; g.fill();
+  g.strokeStyle = '#f2f6ff'; g.lineWidth = 10; g.stroke();
+  g.fillStyle = '#ffffff'; g.textAlign='center'; g.textBaseline='middle';
+  g.font = `700 44px ${SIGN_FONT}`;
+  g.fillText('首都高速', 128, 88);
+  g.font = '700 118px system-ui, sans-serif';
+  g.fillText('C1', 128, 205);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+  return t;
+}
+function arrowMarkTexture(){
+  const c = document.createElement('canvas'); c.width=128; c.height=256;
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgba(240,244,250,0.92)';
+  g.fillRect(52, 90, 24, 150);
+  g.beginPath(); g.moveTo(64, 8); g.lineTo(118, 100); g.lineTo(10, 100); g.closePath(); g.fill();
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+// ---------- lights ----------
+const hemi = new THREE.HemisphereLight(0x2a3a5f, 0x0a0c12, 0.7); scene.add(hemi);
+const moon = new THREE.DirectionalLight(0x8fb0ff, 0.7);
+moon.position.set(-40, 60, 60); moon.castShadow = true;
+moon.shadow.mapSize.set(2048, 2048);
+moon.shadow.camera.left=-170; moon.shadow.camera.right=170;
+moon.shadow.camera.top=120; moon.shadow.camera.bottom=-60;
+moon.shadow.camera.far=400; moon.shadow.bias=-0.0004;
+scene.add(moon); scene.add(moon.target); moon.target.position.set(60,0,-60);
+const sun = new THREE.DirectionalLight(0xfff2dd, 0.0);
+sun.position.set(60, 80, 80); sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left=-170; sun.shadow.camera.right=170;
+sun.shadow.camera.top=120; sun.shadow.camera.bottom=-60;
+sun.shadow.camera.far=400; sun.shadow.bias=-0.0004;
+scene.add(sun); scene.add(sun.target); sun.target.position.set(60,0,-60);
+
+const lampLights = [];   // sodium point lights (subset of lamps)
+const bridgeLights = []; // cool wash on the bridge towers
+const nightFx = [];      // additive glow/streak sprites — hidden in day mode
+let lampHeadMat = null;  // sodium lamp head emissive material
+
+// ---------- sky ----------
+const skyMat = new THREE.MeshBasicMaterial({ map: skyTexture(true), side: THREE.BackSide, fog:false, depthWrite:false });
+const skyDome = new THREE.Mesh(new THREE.SphereGeometry(900, 32, 20), skyMat);
+skyDome.position.set(60, 0, -60); scene.add(skyDome);
+const daySkyTex = skyTexture(false), nightSkyTex = skyMat.map;
+const baySkylineMat = new THREE.MeshBasicMaterial({ map: baySkylineTexture(), transparent:true, fog:false, depthWrite:false });
+const baySkyline = new THREE.Mesh(new THREE.PlaneGeometry(1100, 92), baySkylineMat);
+baySkyline.position.set(140, 34, -520); scene.add(baySkyline);
+
+// warm city glow behind the Odaiba towers (right side)
+const glowTex = glowTexture();
+function addGlow(x, y, z, sx, sy, color, opacity){
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(sx, sy),
+    new THREE.MeshBasicMaterial({ map: glowTex, color, transparent:true, opacity,
+      blending: THREE.AdditiveBlending, depthWrite:false, fog:false }));
+  m.position.set(x, y, z); m.lookAt(camera.position.x, y, camera.position.z);
+  scene.add(m); nightFx.push(m); return m;
+}
+
+// ---------- shared materials / geometry helpers ----------
+const streakTex = streakTexture();
+function streakPlane(w, len, tint, opacity){
+  const geo = new THREE.PlaneGeometry(w, len); geo.rotateX(-Math.PI/2);
+  return new THREE.Mesh(geo,
+    new THREE.MeshBasicMaterial({ map: streakTex, color: tint, transparent:true,
+      opacity, blending: THREE.AdditiveBlending, depthWrite:false }));
+}
+function deckStreak(x, z, t, tint=0xff9a3c, w=2.4, len=15, opacity=0.28){
+  // additive warm streak on the wet deck, elongated along the road
+  const m = streakPlane(w, len, tint, opacity);
+  m.userData.nightFx = true; nightFx.push(m);
+  m.rotation.y = Math.atan2(t.x, t.z) + Math.PI;
+  m.position.set(x, DECK+0.06, z); scene.add(m);
+}
+function waterStreak(x, z, tint, w, len, opacity){
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, len),
+    new THREE.MeshBasicMaterial({ map: streakTex, color: tint, transparent:true,
+      opacity, blending: THREE.AdditiveBlending, depthWrite:false }));
+  m.rotation.x = -Math.PI/2; m.rotation.z = Math.PI;
+  m.position.set(x, -1.9, z); scene.add(m);
+  m.userData.nightFx = true; nightFx.push(m);
+}
+function glowSprite(x, y, z, size, color, opacity=0.85){
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(size, size),
+    new THREE.MeshBasicMaterial({ map: glowTex, color, transparent:true, opacity,
+      blending: THREE.AdditiveBlending, depthWrite:false }));
+  m.position.set(x, y, z);
+  m.onBeforeRender = (r, s, c)=>{ m.quaternion.copy(c.quaternion); };
+  scene.add(m); m.userData.nightFx = true; nightFx.push(m); return m;
+}
+
+const steelMat  = new THREE.MeshStandardMaterial({ color:0x767c86, roughness:0.5, metalness:0.6 });
+const darkSteel = new THREE.MeshStandardMaterial({ color:0x454b54, roughness:0.6,  metalness:0.5 });
+const concreteMat = new THREE.MeshStandardMaterial({ color:0x565b63, roughness:0.9, metalness:0.05 });
+const bridgeWhite = new THREE.MeshStandardMaterial({ color:0xdfe8f2, roughness:0.45, metalness:0.25,
+  emissive:0x8fb8e8, emissiveIntensity:0.07 });
+const cableMat = new THREE.MeshBasicMaterial({ color:0xd8e6f8 });
+function box(w,h,d,mat,x,y,z,ry=0){
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), mat);
+  m.position.set(x,y,z); m.rotation.y = ry;
+  m.castShadow = true; m.receiveShadow = true;
+  scene.add(m); return m;
+}
+
+// ---------- water ----------
+const water = new THREE.Mesh(new THREE.PlaneGeometry(1600, 1600),
+  new THREE.MeshStandardMaterial({ color:0x14253f, roughness:0.18, metalness:0.55 }));
+water.rotation.x = -Math.PI/2; water.position.set(60, -2, -120);
+water.receiveShadow = true; scene.add(water);
+
+// ---------- land strip (Odaiba side, +Z of road) ----------
+const land = new THREE.Mesh(new THREE.BoxGeometry(640, 2.5, 470),
+  new THREE.MeshStandardMaterial({ color:0x11161f, roughness:0.95 }));
+land.position.set(150, -1.25, 250); land.receiveShadow = true; scene.add(land);
+// quay wall at the shoreline
+box(640, 3.4, 2, concreteMat, 150, -1.2, 16.5);
+
+// ---------- road deck (ribbon along the arc) ----------
+let roadMat = null;
+function buildRoad(){
+  const N = 96, hw = ROAD_W/2;
+  const pos = [], uv = [], idx = [];
+  for(let i=0;i<=N;i++){
+    const th = TH0 + (TH1-TH0)*i/N;
+    const c = P(th), n = NRM(th);
+    pos.push(c.x - n.x*hw, DECK, c.z - n.z*hw,  c.x + n.x*hw, DECK, c.z + n.z*hw);
+    const v = (R*(th-TH0))/7;
+    uv.push(0, v, 1, v);
+    if(i<N){ const a=i*2; idx.push(a, a+1, a+2, a+1, a+3, a+2); }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx); g.computeVertexNormals();
+  const tex = asphaltTexture(); tex.repeat.set(3, 26);
+  const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
+    map: tex, color:0xffffff, roughness:0.28, metalness:0.12 }));
+  roadMat = m.material;
+  m.receiveShadow = true; scene.add(m);
+  // fascia + box girder under the deck
+  const girderMat = new THREE.MeshStandardMaterial({ color:0x2b2f36, roughness:0.8 });
+  for(let i=0;i<=N;i+=4){
+    const th = TH0 + (TH1-TH0)*i/N;
+    const c = P(th), t = TAN(th);
+    const seg = box(ROAD_W+0.6, 1.7, (R*(TH1-TH0))/N*4+0.4, girderMat, c.x, DECK-1.05, c.z);
+    seg.rotation.y = Math.atan2(t.x, t.z);
+  }
+}
+// lane markings: solid edge lines + dashed dividers + painted arrows
+function buildMarkings(){
+  const markMat = new THREE.MeshBasicMaterial({ color:0xdfe6ee });
+  const step = 0.008; // ~1.5 m
+  function strip(off, w, dashLen=0, gapLen=0){
+    let d = 0;
+    for(let th=TH0; th<TH1; th+=step){
+      const segLen = R*step;
+      if(dashLen && (d % (dashLen+gapLen)) > dashLen){ d += segLen; continue; }
+      const c = P(th), t = TAN(th), n = NRM(th);
+      const len = dashLen ? Math.min(dashLen - (d % (dashLen+gapLen)), segLen) : segLen;
+      const geo = new THREE.PlaneGeometry(w, len+0.05); geo.rotateX(-Math.PI/2);
+      const m = new THREE.Mesh(geo, markMat);
+      m.rotation.y = Math.atan2(t.x, t.z) + Math.PI; // length along the road
+      m.position.set(c.x + n.x*off, DECK+0.03, c.z + n.z*off);
+      scene.add(m); d += segLen;
+    }
+  }
+  strip(-5.9, 0.16); strip(5.9, 0.16);          // solid edge lines
+  strip(-1.8, 0.15, 3, 6); strip(1.8, 0.15, 3, 6); // dashed lane dividers
+  // painted direction arrows on the middle lane (texture-up = direction of travel)
+  const arrowTex = arrowMarkTexture();
+  for(const th of [0.05, 0.27, 0.49]){
+    const c = P(th), t = TAN(th);
+    const geo = new THREE.PlaneGeometry(1.8, 3.6); geo.rotateX(-Math.PI/2);
+    const m = new THREE.Mesh(geo,
+      new THREE.MeshBasicMaterial({ map: arrowTex, transparent:true, opacity:0.85 }));
+    m.rotation.y = Math.atan2(t.x, t.z) + Math.PI;
+    m.position.set(c.x, DECK+0.035, c.z);
+    scene.add(m);
+  }
+}
+// concrete parapets + piers
+function buildParapetsAndPiers(){
+  const stepLen = 4.2, total = R*(TH1-TH0);
+  const parGeo = new THREE.BoxGeometry(0.55, 1.05, stepLen+0.15);
+  const railGeo = new THREE.BoxGeometry(0.14, 0.14, stepLen+0.15);
+  for(let s=0; s<total; s+=stepLen){
+    const th = TH0 + s/R;
+    const c = P(th), t = TAN(th), n = NRM(th);
+    const ry = Math.atan2(t.x, t.z);
+    for(const side of [-1, 1]){
+      const px = c.x + n.x*(ROAD_W/2-0.35)*side, pz = c.z + n.z*(ROAD_W/2-0.35)*side;
+      const p = new THREE.Mesh(parGeo, concreteMat);
+      p.position.set(px, DECK+0.52, pz); p.rotation.y = ry;
+      p.castShadow = true; p.receiveShadow = true; scene.add(p);
+      if(side<0){ // steel rail on top, water side
+        const r = new THREE.Mesh(railGeo, steelMat);
+        r.position.set(px, DECK+1.28, pz); r.rotation.y = ry; scene.add(r);
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.12,0.5,0.12), steelMat);
+        post.position.set(px, DECK+1.05, pz); scene.add(post);
+      }
+    }
+  }
+  // T piers down to water/land
+  const pierMat = new THREE.MeshStandardMaterial({ color:0x4a4f57, roughness:0.85 });
+  for(let s=13; s<total; s+=26){
+    const th = TH0 + s/R;
+    const c = P(th);
+    box(11, 1.4, 3.2, pierMat, c.x, DECK-2.6, c.z);
+    box(2.4, DECK+0.5, 2.4, pierMat, c.x, (DECK-2)/2 - 1.4, c.z);
+    box(5.5, 1.2, 5.5, pierMat, c.x, -1.6, c.z); // footing in the water
+  }
+}
+// sodium lamp posts along the curve (alternating sides)
+const lampHeads = [];
+function buildLamps(){
+  const poleMat = new THREE.MeshStandardMaterial({ color:0x8a8f96, roughness:0.5, metalness:0.6 });
+  const headMat = new THREE.MeshStandardMaterial({ color:0x2a2a2a, emissive:0xff9a3c,
+    emissiveIntensity:2.6, roughness:0.5 });
+  lampHeadMat = headMat;
+  let i = 0;
+  for(let s=6; s<R*(TH1-TH0)-4; s+=30){
+    const th = TH0 + s/R;
+    const c = P(th), t = TAN(th), n = NRM(th);
+    const side = (i%2===0) ? 1 : -1;
+    const bx = c.x + n.x*(ROAD_W/2+1.0)*side, bz = c.z + n.z*(ROAD_W/2+1.0)*side;
+    const ry = Math.atan2(t.x, t.z);
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.16, 10.5, 10), poleMat);
+    pole.position.set(bx, DECK+5.25, bz); pole.castShadow = true; scene.add(pole);
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.14, 0.14), poleMat);
+    arm.position.set(bx - n.x*1.7*side, DECK+10.3, bz - n.z*1.7*side);
+    arm.rotation.y = ry; // arm lies along the normal: pole -> head over the road
+    scene.add(arm);
+    const hx = bx - n.x*3.2*side, hz = bz - n.z*3.2*side;
+    const head = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.22, 0.42), headMat);
+    head.position.set(hx, DECK+10.2, hz); head.rotation.y = ry; scene.add(head);
+    lampHeads.push({x:hx, y:DECK+10.1, z:hz});
+    glowSprite(hx, DECK+9.9, hz, 9.5, 0xffa63d, 0.85);
+    deckStreak(hx, hz, t, 0xff9a3c, 3.4, 18, 0.38);
+    { // every lamp washes the deck: warm sodium pools kill the pitch-black road
+      const pl = new THREE.PointLight(0xff9a3c, 0, 70, 1.8);
+      pl.position.set(hx, DECK+9.6, hz); scene.add(pl); lampLights.push(pl);
+    }
+    i++;
+  }
+}
+
+// ---------- Rainbow Bridge: twin-tower suspension span across the bay (left horizon) ----------
+const BR = { x: 185, z1: -150, z2: -310, deckY: 14, towerTop: 74 };
+const beaconMats = [];
+function buildBridge(){
+  // anchor capes — the bridge always lands on real ground
+  box(110, 5, 120, new THREE.MeshStandardMaterial({color:0x141a24, roughness:1}), BR.x, -1.5, -58);
+  box(190, 5, 130, new THREE.MeshStandardMaterial({color:0x141a24, roughness:1}), BR.x, -1.5, -430);
+  box(22, 11, 18, concreteMat, BR.x, 2.5, -80);    // anchor blocks
+  box(22, 11, 18, concreteMat, BR.x, 2.5, -380);
+  // deck
+  const deckLen = 300;
+  box(15, 2.2, deckLen, new THREE.MeshStandardMaterial({color:0x646b76, roughness:0.6}),
+      BR.x, BR.deckY, -230);
+  // glowing edge lines along the deck (the lit-deck signature)
+  const edgeMat = new THREE.MeshBasicMaterial({ color:0xcfe8ff });
+  for(const dx of [-7.2, 7.2]){
+    const e = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.35, deckLen), edgeMat);
+    e.position.set(BR.x+dx, BR.deckY+1.15, -230); scene.add(e);
+  }
+  // towers: portal frames on concrete footings standing in the water
+  for(const tz of [BR.z1, BR.z2]){
+    box(11, 5, 9, concreteMat, BR.x, -2.5, tz); // footing: 2 m proud of the water
+    for(const dx of [-6, 6])
+      box(2.2, BR.towerTop+2, 2.6, bridgeWhite, BR.x+dx, (BR.towerTop-2)/2 - 1, tz);
+    box(15.5, 3.2, 3.2, bridgeWhite, BR.x, 20, tz);
+    box(15.5, 2.6, 2.6, bridgeWhite, BR.x, 64, tz);
+    const bc = new THREE.Mesh(new THREE.SphereGeometry(0.55, 10, 10),
+      new THREE.MeshStandardMaterial({ color:0x220000, emissive:0xff2222, emissiveIntensity:3 }));
+    bc.position.set(BR.x, BR.towerTop+1.2, tz); scene.add(bc);
+    beaconMats.push(bc.material);
+    const wl = new THREE.PointLight(0xbfe0ff, 0, 140, 1.7);
+    wl.position.set(BR.x, 46, tz); scene.add(wl); bridgeLights.push(wl);
+  }
+  // main cables: catenary over both tower tops, two planes (deck edges);
+  // side spans run down into the anchor blocks — no floating cable ends
+  for(const dx of [-6.6, 6.6]){
+    const pts = [
+      new THREE.Vector3(BR.x+dx, 8.5, -80),
+      new THREE.Vector3(BR.x+dx, BR.towerTop-1, BR.z1),
+      new THREE.Vector3(BR.x+dx, 36, (BR.z1+BR.z2)/2),
+      new THREE.Vector3(BR.x+dx, BR.towerTop-1, BR.z2),
+      new THREE.Vector3(BR.x+dx, 8.5, -380),
+    ];
+    const curve = new THREE.CatmullRomCurve3(pts);
+    const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 72, 0.42, 8), cableMat);
+    scene.add(tube);
+    // suspenders: sample the cable, drop verticals to the deck in the main span
+    const suspMat = new THREE.MeshBasicMaterial({ color:0xaecbe8 });
+    const samples = curve.getPoints(220);
+    for(const p of samples){
+      if(p.z < BR.z1-6 || p.z > BR.z2+6) continue;
+      if(Math.abs(p.z % 14) > 1.1) continue;
+      const h = p.y - (BR.deckY+1.1);
+      if(h < 2) continue;
+      const s = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, h, 6), suspMat);
+      s.position.set(p.x, BR.deckY+1.1+h/2, p.z); scene.add(s);
+    }
+  }
+  // cool reflection streaks on the water flanking the towers + under the deck
+  for(const tz of [BR.z1, BR.z2]){
+    waterStreak(BR.x-14, tz, 0x9fd0ff, 12, 100, 0.35);
+    waterStreak(BR.x+14, tz, 0x9fd0ff, 12, 100, 0.35);
+  }
+  waterStreak(BR.x-30, -230, 0x7fb8f0, 26, 150, 0.16);
+}
+
+// ---------- Odaiba tower cluster (right side, on the land) ----------
+const towerMats = [];
+function buildTowers(){
+  const defs = [
+    [30, 78, 26, 26, 62, 11, 0.55], [82, 100, 30, 24, 88, 12, 0.4],
+    [134, 80, 24, 30, 54, 13, 0.6], [186, 112, 34, 28, 96, 14, 0.45],
+    [238, 84, 26, 26, 70, 15, 0.5], [62, 148, 30, 30, 48, 16, 0.65],
+    [158, 162, 28, 24, 76, 17, 0.5],
+  ];
+  for(const [x, z, w, d, h, seed, warm] of defs){
+    const tex = towerTexture(seed, warm);
+    const mat = new THREE.MeshStandardMaterial({ map: tex, emissive:0xffffff,
+      emissiveMap: tex, emissiveIntensity:0.85, roughness:0.85 });
+    towerMats.push(mat);
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(x, h/2, z); m.castShadow = true; m.receiveShadow = true; scene.add(m);
+    box(w+1.5, 2.2, d+1.5, darkSteel, x, h+1.1, z); // roof plant
+    if(h >= 88){
+      const bc = new THREE.Mesh(new THREE.SphereGeometry(0.5, 10, 10),
+        new THREE.MeshStandardMaterial({ color:0x220000, emissive:0xff2222, emissiveIntensity:3 }));
+      bc.position.set(x, h+2.8, z); scene.add(bc); beaconMats.push(bc.material);
+    }
+  }
+  // warm city glow behind the cluster
+  addGlow(300, 55, 130, 420, 150, 0xff9a4d, 0.16);
+}
+
+// ---------- ferris wheel (far right, legs planted on the land) ----------
+let wheelRim;
+function buildFerrisWheel(){
+  const g = new THREE.Group(); g.position.set(315, 0, 55); g.rotation.y = -Math.PI/2;
+  const neonPink = new THREE.MeshBasicMaterial({ color:0xff9ad5, fog:false });
+  const neonCyan = new THREE.MeshBasicMaterial({ color:0x9ae8ff, fog:false });
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(21, 0.55, 10, 48), neonPink);
+  rim.position.y = 36; g.add(rim); wheelRim = rim;
+  const spokeMat = new THREE.MeshBasicMaterial({ color:0xc8d8f0, fog:false });
+  for(let i=0;i<12;i++){
+    const a = i/12*Math.PI*2;
+    const sp = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 21, 6), spokeMat);
+    sp.position.set(Math.cos(a)*10.5, 36+Math.sin(a)*10.5, 0);
+    sp.rotation.z = a + Math.PI/2; g.add(sp);
+    const cab = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.6, 1.6),
+      i%2 ? neonPink : neonCyan);
+    cab.position.set(Math.cos(a)*21, 36+Math.sin(a)*21, 0); g.add(cab);
+  }
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.4, 3, 12), spokeMat);
+  hub.rotation.x = Math.PI/2; hub.position.y = 36; g.add(hub);
+  const legMat = new THREE.MeshStandardMaterial({ color:0x4a5260, roughness:0.6, metalness:0.5 });
+  for(const [sx, sz] of [[-1,-1],[1,-1],[-1,1],[1,1]]){
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.9, 38, 8), legMat);
+    leg.position.set(sx*7, 18, sz*3.5); leg.rotation.z = -sx*0.19; leg.rotation.x = sz*0.09;
+    leg.castShadow = true; g.add(leg);
+  }
+  glowSprite(315, 36, 55, 60, 0xff9ad5, 0.28);
+  scene.add(g);
+}
+
+// ---------- low-poly traffic (one car ahead, like the reference) ----------
+function makeCar(color, wing=false){
+  const g = new THREE.Group();
+  const bodyMat = new THREE.MeshStandardMaterial({ color, roughness:0.35, metalness:0.6 });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.75, 4.4), bodyMat);
+  body.position.y = 0.75; body.castShadow = true; g.add(body);
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.65, 0.6, 2.1),
+    new THREE.MeshStandardMaterial({ color:0x0c1016, roughness:0.2, metalness:0.4 }));
+  cabin.position.set(0, 1.35, -0.2); g.add(cabin);
+  const wg = new THREE.CylinderGeometry(0.34, 0.34, 0.28, 12);
+  const wm = new THREE.MeshStandardMaterial({ color:0x0a0a0a, roughness:0.9 });
+  for(const [sx, sz] of [[-0.85,1.4],[0.85,1.4],[-0.85,-1.4],[0.85,-1.4]]){
+    const w = new THREE.Mesh(wg, wm); w.rotation.z = Math.PI/2;
+    w.position.set(sx, 0.34, sz); g.add(w);
+  }
+  if(wing){ // GT rear wing: two struts + blade, physically mounted on the trunk
+    const strutMat = new THREE.MeshStandardMaterial({ color:0x14161a, roughness:0.5, metalness:0.4 });
+    for(const sx of [-0.55, 0.55]){
+      const s = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.55, 0.3), strutMat);
+      s.position.set(sx, 1.25, -1.95); g.add(s);
+    }
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.08, 0.55), strutMat);
+    blade.position.set(0, 1.55, -1.95); blade.castShadow = true; g.add(blade);
+  }
+  // taillights face -Z (rear); headlights +Z
+  const tail = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.22, 0.1),
+    new THREE.MeshStandardMaterial({ color:0x330000, emissive:0xff2a1a, emissiveIntensity:3.2 }));
+  tail.position.set(0, 0.85, -2.22); g.add(tail);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.2, 0.1),
+    new THREE.MeshStandardMaterial({ color:0x222222, emissive:0xfff2cc, emissiveIntensity:2.4 }));
+  head.position.set(0, 0.8, 2.22); g.add(head);
+  return g;
+}
+function placeCar(th, laneOff, color, wing=false){
+  const c = P(th), t = TAN(th), n = NRM(th);
+  const car = makeCar(color, wing);
+  car.position.set(c.x + n.x*laneOff, DECK, c.z + n.z*laneOff);
+  car.rotation.y = Math.atan2(t.x, t.z);
+  scene.add(car);
+  // red taillight glow visible from behind
+  const rear = new THREE.Vector3(c.x + n.x*laneOff - t.x*2.4, DECK+0.78, c.z + n.z*laneOff - t.z*2.4);
+  glowSprite(rear.x, rear.y, rear.z, 2.2, 0xff3524, 0.5);
+}
+
+// ---------- gantry signs (REAL Japanese text, mounted on real gantries) ----------
+function buildGantry(th, panels, badge){
+  const c = P(th), t = TAN(th), n = NRM(th);
+  const ry = Math.atan2(t.x, t.z);
+  const span = ROAD_W + 3.4;
+  // posts land on the deck parapets — never floating
+  for(const side of [-1, 1]){
+    const px = c.x + n.x*(span/2)*side, pz = c.z + n.z*(span/2)*side;
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.9, 7.2, 0.9), steelMat);
+    post.position.set(px, DECK+3.6, pz); post.castShadow = true; scene.add(post);
+  }
+  const beam = new THREE.Mesh(new THREE.BoxGeometry(span+1.2, 1.3, 1.1), steelMat);
+  beam.position.set(c.x, DECK+7.0, c.z); beam.rotation.y = ry; beam.castShadow = true; scene.add(beam);
+  // truss diagonals on the beam
+  for(let k=-4;k<=4;k++){
+    const d = new THREE.Mesh(new THREE.BoxGeometry(0.18, 1.1, 0.18), darkSteel);
+    const ox = k*(span/9);
+    d.position.set(c.x + Math.cos(ry)*ox, DECK+7.0, c.z - Math.sin(ry)*ox);
+    d.rotation.y = ry; d.rotation.z = (k%2? 0.5 : -0.5); scene.add(d);
+  }
+  // sign panels hang from the beam
+  const totalW = panels.reduce((a,p)=>a+p.w, 0) + (panels.length-1)*0.5;
+  let ox = -totalW/2;
+  for(const p of panels){
+    const cx = c.x + Math.cos(ry)*(ox + p.w/2), cz = c.z - Math.sin(ry)*(ox + p.w/2);
+    const tex = gantryPanelTexture(p.rows);
+    const mat = new THREE.MeshStandardMaterial({ map: tex, emissive:0xffffff,
+      emissiveMap: tex, emissiveIntensity:0.5, roughness:0.5 });
+    const h = 2.1;
+    for(const s of [0.09, -0.09]){ // front + back faces
+      const pl = new THREE.Mesh(new THREE.PlaneGeometry(p.w, h), mat);
+      pl.position.set(cx + t.x*s, DECK+5.5, cz + t.z*s);
+      pl.rotation.y = ry + (s>0 ? 0 : Math.PI);
+      scene.add(pl);
+    }
+    const back = new THREE.Mesh(new THREE.BoxGeometry(p.w, h, 0.12), darkSteel);
+    back.position.set(cx, DECK+5.5, cz); back.rotation.y = ry; scene.add(back);
+    // hanger straps up to the beam
+    for(const hx of [-p.w/2+0.5, p.w/2-0.5]){
+      const sx = c.x + Math.cos(ry)*(ox + p.w/2 + hx), sz = c.z - Math.sin(ry)*(ox + p.w/2 + hx);
+      const strap = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.0, 0.12), darkSteel);
+      strap.position.set(sx, DECK+7.0, sz); scene.add(strap);
+    }
+    ox += p.w + 0.5;
+  }
+  if(badge){
+    const bx = c.x + Math.cos(ry)*(-span/2+2.2), bz = c.z - Math.sin(ry)*(-span/2+2.2);
+    const bt = routeBadgeTexture();
+    const bm = new THREE.MeshStandardMaterial({ map: bt, emissive:0xffffff,
+      emissiveMap: bt, emissiveIntensity:0.5, roughness:0.5 });
+    const bp = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 1.05), bm);
+    bp.position.set(bx, DECK+5.5, bz); bp.rotation.y = ry + Math.PI; scene.add(bp); // face oncoming drivers
+  }
+}
+// roadside pole sign (blue, like the reference photo)
+function buildRoadsideSign(th, side, text){
+  const c = P(th), t = TAN(th), n = NRM(th);
+  const ry = Math.atan2(t.x, t.z);
+  const px = c.x + n.x*(ROAD_W/2+2.2)*side, pz = c.z + n.z*(ROAD_W/2+2.2)*side;
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.18, 5.4, 10), steelMat);
+  pole.position.set(px, DECK+2.7, pz); pole.castShadow = true; scene.add(pole);
+  const tex = gantryPanelTexture([{ text, arrow:'up' }], 640, 200);
+  const mat = new THREE.MeshStandardMaterial({ map: tex, emissive:0xffffff,
+    emissiveMap: tex, emissiveIntensity:0.55, roughness:0.5 });
+  const pl = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 1.35), mat);
+  pl.position.set(px, DECK+5.6, pz); pl.rotation.y = ry + Math.PI; scene.add(pl); // face oncoming drivers
+  const back = new THREE.Mesh(new THREE.BoxGeometry(4.4, 1.35, 0.1), darkSteel);
+  back.position.set(px, DECK+5.6, pz); back.rotation.y = ry; scene.add(back);
+}
+// C1 route shield on a guardrail-side post, facing oncoming drivers (as in the mock)
+function buildShieldPost(th, side){
+  const c = P(th), t = TAN(th), n = NRM(th);
+  const ry = Math.atan2(t.x, t.z);
+  const px = c.x + n.x*(ROAD_W/2+1.3)*side, pz = c.z + n.z*(ROAD_W/2+1.3)*side;
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.15, 3.6, 10), steelMat);
+  pole.position.set(px, DECK+1.8, pz); pole.castShadow = true; scene.add(pole);
+  const tex = routeShieldTexture();
+  const mat = new THREE.MeshStandardMaterial({ map: tex, emissive:0xffffff,
+    emissiveMap: tex, emissiveIntensity:0.55, roughness:0.5, transparent:true });
+  for(const s of [0.07, -0.07]){
+    const pl = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 2.15), mat);
+    pl.position.set(px + t.x*s, DECK+4.4, pz + t.z*s);
+    pl.rotation.y = ry + (s>0 ? 0 : Math.PI);
+    scene.add(pl);
+  }
+}
+
+// ---------- day / night ----------
+function setNight(on){
+  document.getElementById('btn-night').classList.toggle('on', on);
+  document.getElementById('btn-day').classList.toggle('on', !on);
+  if(on){
+    scene.background.set(0x060a18); scene.fog.color.set(0x060a18);
+    hemi.intensity=0.85; hemi.color.set(0x2a3a5f); hemi.groundColor.set(0x0a0c12);
+    moon.intensity=0.7; sun.intensity=0.0;
+    lampLights.forEach(p=>p.intensity=90);
+    bridgeLights.forEach(p=>p.intensity=110);
+    if(lampHeadMat) lampHeadMat.emissiveIntensity = 2.6;
+    renderer.toneMappingExposure=1.38;
+    skyMat.map = nightSkyTex; baySkyline.visible = true;
+    nightFx.forEach(m=>m.visible=true);
+    towerMats.forEach(m=>m.emissiveIntensity=0.85);
+    if(roadMat) roadMat.color.setRGB(1,1,1);
+  } else {
+    scene.background.set(0x9fc3e8); scene.fog.color.set(0x9fc3e8);
+    hemi.intensity=1.1; hemi.color.set(0xbfd9ff); hemi.groundColor.set(0x6a7078);
+    moon.intensity=0.0; sun.intensity=2.6;
+    lampLights.forEach(p=>p.intensity=0);
+    bridgeLights.forEach(p=>p.intensity=0);
+    if(lampHeadMat) lampHeadMat.emissiveIntensity = 0.15;
+    renderer.toneMappingExposure=1.0;
+    skyMat.map = daySkyTex; baySkyline.visible = false;
+    nightFx.forEach(m=>m.visible=false);
+    towerMats.forEach(m=>m.emissiveIntensity=0.0);
+    if(roadMat) roadMat.color.setRGB(1.7,1.7,1.7); // lift the asphalt out of the dark in daylight
+  }
+  skyMat.needsUpdate = true;
+  window.__we.night = on;
+}
+document.getElementById('btn-day').onclick = ()=>setNight(false);
+document.getElementById('btn-night').onclick = ()=>setNight(true);
+
+// ---------- inline orbit (showroom pattern) ----------
+const orbit = { theta:0.0, phi:1.44, radius:30, target:new THREE.Vector3(0,2.2,-34), auto:false };
+let dragging=false, px=0, py=0;
+canvas.addEventListener('pointerdown', e=>{ dragging=true; px=e.clientX; py=e.clientY; orbit.auto=false; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', e=>{
+  if(!dragging) return;
+  orbit.theta -= (e.clientX-px)*0.007;
+  orbit.phi = THREE.MathUtils.clamp(orbit.phi-(e.clientY-py)*0.007, 0.12, Math.PI-0.08);
+  px=e.clientX; py=e.clientY;
+});
+canvas.addEventListener('pointerup', ()=>{ dragging=false; });
+canvas.addEventListener('pointercancel', ()=>{ dragging=false; });
+canvas.addEventListener('wheel', e=>{
+  e.preventDefault();
+  orbit.radius = THREE.MathUtils.clamp(orbit.radius*(1+Math.sign(e.deltaY)*0.1), 4, 320);
+  orbit.auto=false;
+}, { passive:false });
+
+function streetView(){
+  // driver's eye on the curve: bridge left horizon, towers right, car ahead
+  const cam = P(0.02); cam.y = DECK+1.7;
+  const tgt = P(0.34); tgt.y = DECK+1.1;
+  const d = cam.clone().sub(tgt);
+  orbit.target.copy(tgt);
+  orbit.radius = d.length();
+  orbit.phi = Math.acos(THREE.MathUtils.clamp(d.y/orbit.radius, -1, 1));
+  orbit.theta = Math.atan2(d.x, d.z);
+  orbit.auto = false;
+}
+function setView(theta, phi, radius, tx, ty, tz){
+  orbit.theta=theta; orbit.phi=phi; orbit.radius=radius;
+  orbit.target.set(tx,ty,tz); orbit.auto=false;
+}
+document.getElementById('btn-cam').onclick = streetView;
+
+function sizeRenderer(){
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setPixelRatio(LOWFX ? 1 : Math.min(window.devicePixelRatio||1, 2));
+  renderer.setSize(w, h, false);
+  camera.aspect = w/h; camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', sizeRenderer);
+
+// ---------- build ----------
+async function build(){
+  await ensureSignFont();
+  buildRoad();
+  buildMarkings();
+  buildParapetsAndPiers();
+  buildLamps();
+  buildBridge();
+  buildTowers();
+  buildFerrisWheel();
+  // gantries with real Japanese directions (approved mock wording)
+  buildGantry(0.12, [
+    { w: 9.5, rows:[{ text:'お台場', sub:'300m 出口' }] },
+    { w: 8.5, rows:[{ text:'東京方面', arrow:'up' }] },
+  ]);
+  buildShieldPost(0.075, -1); // 首都高速 C1 shield on the left guardrail post
+  buildGantry(0.42, [
+    { w: 11, rows:[
+      { text:'お台場  3km', arrow:'up' },
+      { text:'大井  7km', arrow:'up' },
+      { text:'横浜  15km', arrow:'up' },
+    ]},
+  ]);
+  buildRoadsideSign(-0.04, 1, 'お台場入口');
+  // traffic: silver hero coupe ahead in the center lane (chase-cam composition),
+  // second car further ahead in the left lane
+  placeCar(0.095, 0, 0xc9ced6, true);
+  placeCar(0.31, -3.6, 0x14264a);
+}
+
+let shotFrames = 0;
+function loop(t){
+  if(SHOT && window.__we.ready && ++shotFrames > 12){
+    document.title = 'WE-SHOT-READY';
+    return; // stop: deterministic frame for screenshots
+  }
+  requestAnimationFrame(loop);
+  if (orbit.auto) orbit.theta += 0.003;
+  const sp = Math.sin(orbit.phi);
+  camera.position.set(
+    orbit.target.x + orbit.radius*sp*Math.sin(orbit.theta),
+    orbit.target.y + orbit.radius*Math.cos(orbit.phi),
+    orbit.target.z + orbit.radius*sp*Math.cos(orbit.theta));
+  camera.lookAt(orbit.target);
+  // red beacon pulse (night only)
+  const night = window.__we.night;
+  const k = (Math.sin((t||0)*0.006)+1)/2;
+  beaconMats.forEach(m=>{ m.emissiveIntensity = night ? 0.6+5.0*k : 0.0; });
+  if (wheelRim && night) wheelRim.parent.rotation.z += 0.0016;
+  renderer.render(scene, camera);
+}
+
+window.__we = { night:true, ready:false, setNight, streetView, setView, scene, camera,
+  state:()=>({ ready:window.__we.ready, night:window.__we.night,
+    objects: scene.children.length,
+    cam: camera.position.toArray().map(v=>+v.toFixed(2)) }) };
+
+sizeRenderer();
+const DAY = q.get('day') === '1';
+setNight(!DAY);
+build().then(()=>{
+  setNight(!DAY); // re-apply: lamp/bridge lights only exist after build
+  window.__we.ready = true;
+  statusEl.textContent = 'ready — procedural bayshore expressway · static diorama';
+  // headless screenshot presets: ?view=street|wide|bridge, &day=1 for day mode
+  const v = q.get('view') || 'street';
+  if(v==='street') streetView();
+  else if(v==='wide') setView(-2.28, 1.05, 190, 110, 6, -70);
+  else if(v==='bridge') setView(-1.85, 1.18, 120, 185, 22, -230);
+  else if(v==='signs'){ // zoom check on gantry A signage
+    const cam = P(0.035); cam.y = DECK+3.2;
+    const tgt = P(0.12); tgt.y = DECK+5.3;
+    const d = cam.clone().sub(tgt);
+    orbit.target.copy(tgt);
+    orbit.radius = d.length();
+    orbit.phi = Math.acos(THREE.MathUtils.clamp(d.y/orbit.radius, -1, 1));
+    orbit.theta = Math.atan2(d.x, d.z);
+    orbit.auto = false;
+  }
+}).catch(err=>{
+  statusEl.textContent = 'LOAD ERROR: ' + (err.message||err);
+  window.__we.error = String(err);
+});
+loop();
+</script>
+</body>
+</html>

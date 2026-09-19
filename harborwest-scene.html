@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Harbor West — Night Fishing Port · 3D Diorama</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:#04060c;overflow:hidden}
+  #view{display:block;width:100vw;height:100vh;cursor:grab;touch-action:none}
+  #view:active{cursor:grabbing}
+  #hud{position:fixed;top:12px;left:14px;color:#fff;font:13px/1.5 system-ui,sans-serif;
+    text-shadow:0 1px 4px #000;pointer-events:none;z-index:5}
+  #hud b{font-size:15px;letter-spacing:.5px}
+  #bar{position:fixed;top:12px;right:14px;z-index:6;display:flex;gap:8px}
+  #bar button{background:rgba(20,24,32,.85);color:#fff;border:1px solid #3a4356;border-radius:8px;
+    padding:9px 14px;font-size:13px;cursor:pointer}
+  #bar button.on{background:#1c3a5e;border-color:#58a6ff}
+  #status{position:fixed;bottom:12px;left:14px;color:#9aa4b5;font:12px system-ui,sans-serif;
+    text-shadow:0 1px 3px #000;z-index:5}
+  #hint{position:fixed;bottom:12px;right:14px;color:#9aa4b5;font:12px system-ui,sans-serif;z-index:5}
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="hud"><b>Harbor West — night fishing port</b><br><span id="sub">static scene · orbit showroom</span></div>
+<div id="bar">
+  <button id="btn-day">☀ Day</button>
+  <button id="btn-night" class="on">🌙 Night</button>
+  <button id="btn-cam">📷 Street view</button>
+</div>
+<div id="status">loading…</div>
+<div id="hint">drag to orbit · scroll to zoom</div>
+
+<script type="module">
+import * as THREE from './vendor/three.module.js';
+import { GLTFLoader } from './vendor/GLTFLoader.js';
+
+const MDIR = './public/models/harborwest/';
+const statusEl = document.getElementById('status');
+
+const canvas = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.25;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a1220);
+scene.fog = new THREE.Fog(0x0a1220, 60, 200);
+
+const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 700);
+
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+function shade(hex,f){const n=parseInt(hex.slice(1),16);const r=Math.min(255,((n>>16)&255)*f)|0,g=Math.min(255,((n>>8)&255)*f)|0,b=Math.min(255,(n&255)*f)|0;return `rgb(${r},${g},${b})`;}
+
+// ---------- sign textures: REAL Japanese text only ----------
+const CJK = '"Noto Sans CJK JP","Noto Sans CJK SC","Noto Sans CJK",sans-serif';
+function signTexture(text, bg, fg, horizontal, seed){
+  const w = horizontal?512:288, h = horizontal?288:512;
+  const c = document.createElement('canvas'); c.width=w; c.height=h;
+  const g = c.getContext('2d'), rnd = mulberry32(seed);
+  const grad = g.createLinearGradient(0,0,0,h);
+  grad.addColorStop(0, shade(bg,1.14)); grad.addColorStop(0.55, shade(bg,0.96)); grad.addColorStop(1, shade(bg,0.60));
+  g.fillStyle = grad; g.fillRect(0,0,w,h);
+  const sheen = g.createLinearGradient(0,0,w,0);
+  sheen.addColorStop(0,'rgba(255,255,255,0)'); sheen.addColorStop(0.5,'rgba(255,255,255,0.10)'); sheen.addColorStop(1,'rgba(255,255,255,0)');
+  g.fillStyle = sheen; g.fillRect(0,0,w,h);
+  g.strokeStyle = fg; g.lineWidth = Math.max(3, w*0.022);
+  g.strokeRect(g.lineWidth, g.lineWidth, w-2*g.lineWidth, h-2*g.lineWidth);
+  g.fillStyle = fg; g.textAlign='center'; g.textBaseline='middle';
+  if(horizontal){
+    const fs = Math.min(h*0.52, w/(text.length*0.66));
+    g.font = `900 ${fs}px ${CJK}`;
+    g.fillText(text, w/2, h/2);
+  } else {
+    const fs = Math.min(w*0.58, h/(text.length*1.04));
+    g.font = `900 ${fs}px ${CJK}`;
+    const chars = [...text];
+    chars.forEach((ch,i)=> g.fillText(ch, w/2, h/2 + (i-(chars.length-1)/2)*fs*1.02));
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  return t;
+}
+function streakTexture(){
+  const c = document.createElement('canvas'); c.width=64; c.height=256;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0,0,0,256);
+  grad.addColorStop(0,'rgba(255,255,255,0.9)'); grad.addColorStop(1,'rgba(255,255,255,0)');
+  g.fillStyle = grad; g.fillRect(0,0,64,256);
+  const img = g.getImageData(0,0,64,256), d = img.data;
+  for(let y=0;y<256;y++) for(let x=0;x<64;x++){
+    const f = Math.sin(Math.PI*x/64);
+    d[(y*64+x)*4+3] *= f;
+  }
+  g.putImageData(img,0,0);
+  return new THREE.CanvasTexture(c);
+}
+function skyTexture(night){
+  const c = document.createElement('canvas'); c.width=1024; c.height=512;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0,0,0,512);
+  if(night){
+    // deep-blue fishing-port night, warm town glow low on the horizon
+    grad.addColorStop(0,'#020409'); grad.addColorStop(0.45,'#0a1430');
+    grad.addColorStop(0.62,'#27406b'); grad.addColorStop(0.68,'#c8a06a');
+    grad.addColorStop(0.72,'#1a2a4a'); grad.addColorStop(1,'#04060c');
+  } else {
+    grad.addColorStop(0,'#3f7fd0'); grad.addColorStop(0.6,'#9cc6ee');
+    grad.addColorStop(0.72,'#dfe8ee'); grad.addColorStop(1,'#aebfca');
+  }
+  g.fillStyle = grad; g.fillRect(0,0,1024,512);
+  const rnd = mulberry32(31);
+  if(night){
+    for(let i=0;i<460;i++){
+      const y = rnd()*300, x = rnd()*1024;
+      g.fillStyle = `rgba(255,255,255,${0.25+rnd()*0.6})`;
+      g.fillRect(x, y, rnd()<0.12?2:1, rnd()<0.12?2:1);
+    }
+    // far-shore fishing-town glow
+    for(const [hx,col] of [[420,'rgba(255,190,120,0.10)'],[760,'rgba(150,200,255,0.10)']]){
+      const rg = g.createRadialGradient(hx,355,10,hx,355,170);
+      rg.addColorStop(0,col); rg.addColorStop(1,'rgba(0,0,0,0)');
+      g.fillStyle = rg; g.fillRect(0,180,1024,220);
+    }
+  } else {
+    g.fillStyle='rgba(255,255,255,0.5)';
+    for(let i=0;i<14;i++){ const x=rnd()*1024,y=40+rnd()*180; g.beginPath(); g.ellipse(x,y,40+rnd()*60,12+rnd()*10,0,0,7); g.fill(); }
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+// far-shore town silhouette: houses + harbor lights, no industrial shapes
+function townSkylineTexture(){
+  const c = document.createElement('canvas'); c.width=2048; c.height=256;
+  const g = c.getContext('2d'), rnd = mulberry32(99);
+  g.clearRect(0,0,2048,256);
+  let x = 0;
+  while(x < 2048){
+    const kind = rnd();
+    if(kind < 0.55){            // gabled house silhouette
+      const bw = 50+rnd()*80, bh = 34+rnd()*46;
+      g.fillStyle = '#04060b';
+      g.fillRect(x, 256-bh, bw, bh);
+      g.beginPath();
+      g.moveTo(x-4, 256-bh); g.lineTo(x+bw/2, 256-bh-18-rnd()*10); g.lineTo(x+bw+4, 256-bh);
+      g.closePath(); g.fill();
+      for(let wy=256-bh+8; wy<250; wy+=11) for(let wx=x+6; wx<x+bw-6; wx+=10){
+        if(rnd()<0.28){
+          const warm = rnd()<0.7;
+          g.fillStyle = warm?`rgba(255,${175+rnd()*40|0},100,0.9)`:`rgba(140,200,255,0.85)`;
+          g.fillRect(wx, wy, 5, 6);
+        }
+      }
+    } else if(kind < 0.8){      // low warehouse strip
+      const bw = 110+rnd()*120, bh = 30+rnd()*26;
+      g.fillStyle = '#04060b'; g.fillRect(x, 256-bh, bw, bh);
+      for(let wx=x+8; wx<x+bw-8; wx+=16){
+        if(rnd()<0.35){ g.fillStyle=`rgba(255,${175+rnd()*40|0},100,0.85)`; g.fillRect(wx, 256-bh+8, 7, 7); }
+      }
+    } else {                    // harbor lamp post glow
+      const bh = 60+rnd()*40;
+      g.fillStyle = '#04060b'; g.fillRect(x, 256-bh, 4, bh);
+      const rg = g.createRadialGradient(x+2, 256-bh, 2, x+2, 256-bh, 42);
+      rg.addColorStop(0,'rgba(255,190,110,0.85)'); rg.addColorStop(1,'rgba(255,190,110,0)');
+      g.fillStyle = rg; g.beginPath(); g.arc(x+2, 256-bh, 42, 0, 7); g.fill();
+    }
+    x += 70 + rnd()*90;
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+// ---------- lights ----------
+// night: sodium-amber lamps + deep-blue moonlight. Day: sun.
+const hemi = new THREE.HemisphereLight(0x33456e, 0x0a0d14, 0.55); scene.add(hemi);
+const moon = new THREE.DirectionalLight(0xa8c0ff, 0.5);
+moon.position.set(60, 55, -40); moon.castShadow = true;
+moon.shadow.mapSize.set(2048, 2048);
+moon.shadow.camera.left=-70; moon.shadow.camera.right=70;
+moon.shadow.camera.top=70; moon.shadow.camera.bottom=-70;
+moon.shadow.camera.far=220; moon.shadow.bias=-0.0004;
+scene.add(moon); scene.add(moon.target); moon.target.position.set(0,0,-30);
+const sun = new THREE.DirectionalLight(0xfff2dd, 0.0);
+sun.position.set(40, 50, 30); sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left=-70; sun.shadow.camera.right=70;
+sun.shadow.camera.top=70; sun.shadow.camera.bottom=-70;
+sun.shadow.camera.far=220; sun.shadow.bias=-0.0004;
+scene.add(sun); scene.add(sun.target); sun.target.position.set(0,0,-30);
+
+// sodium-amber quay lamps (night) — lamp poles along the quay edge
+const lampPos = [[8.6,-6],[8.6,-18],[8.6,-30],[8.6,-42],[8.6,-54]];
+const lampLights = [];
+for (const [x,z] of lampPos){
+  const p = new THREE.PointLight(0xffa63d, 0, 40, 1.7);
+  p.position.set(x, 8.6, z); scene.add(p); lampLights.push(p);
+}
+// warm deck lamps on moored boats (night) — positioned at the boats' masthead navlights
+const boatLights = [];
+const boatLightPos = [[13.5,-14],[13.5,-28],[13.5,-42]];
+for (const [x,z] of boatLightPos){
+  const p = new THREE.PointLight(0xffc37a, 0, 14, 1.8);
+  p.position.set(x, 2.3, z); scene.add(p); boatLights.push(p);
+}
+// cool blue fill off the water for the amber/blue contrast
+const blueFill = new THREE.PointLight(0x3a5a9a, 0, 70, 1.8);
+blueFill.position.set(24, 10, -32); scene.add(blueFill);
+
+// ---- Craig's night-life rules: lit interiors + no pitch-black surfaces ----
+const ambientNight = new THREE.AmbientLight(0x24324e, 0); scene.add(ambientNight);
+// warm interior materials: shops/warehouses read as working and open at night
+const winLitMat = new THREE.MeshStandardMaterial({ color:0x3a2c1c, emissive:0xffb45e, emissiveIntensity:0, roughness:0.35, metalness:0.0 });
+const winDimMat = new THREE.MeshStandardMaterial({ color:0x2c241c, emissive:0xff9d4e, emissiveIntensity:0, roughness:0.40, metalness:0.0 });
+const doorGlowMat = new THREE.MeshStandardMaterial({ color:0x2a2118, emissive:0xffa54e, emissiveIntensity:0, roughness:0.60, metalness:0.0 });
+const boatGlassLitMat = new THREE.MeshStandardMaterial({ color:0x2a2118, emissive:0xffb45e, emissiveIntensity:0, roughness:0.30, metalness:0.1 });
+const boatGlassDarkMat = new THREE.MeshStandardMaterial({ color:0x1a2330, roughness:0.25, metalness:0.1 });
+const interiorLights = []; // door-spill + boat deck lamps; intensity toggled by setNight
+const spillDecals = [];    // fake light-bleed gradient decals on facades; visible at night only
+
+// soft radial gradient decal: fakes lamp/sign light bleeding onto nearby facades
+function bleedTexture(){
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const rg = g.createRadialGradient(64,64,4,64,64,64);
+  rg.addColorStop(0,'rgba(255,255,255,0.85)');
+  rg.addColorStop(0.5,'rgba(255,255,255,0.28)');
+  rg.addColorStop(1,'rgba(255,255,255,0)');
+  g.fillStyle = rg; g.fillRect(0,0,128,128);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+const bleedTex = bleedTexture();
+function glowDecal(w, h, tint, opacity){
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h),
+    new THREE.MeshBasicMaterial({ map: bleedTex, color: tint, transparent: true, opacity,
+      blending: THREE.AdditiveBlending, depthWrite: false }));
+  m.visible = false; spillDecals.push(m);
+  return m;
+}
+// light one warehouse: warm lit windows on the road-facing facade (+Z local),
+// a lit/open doorway, and fake light-bleed decals washing the facade.
+function lightWarehouse(obj, pattern, doorMode){
+  const wins = [];
+  obj.traverse(n=>{
+    if(n.isMesh && n.name.includes('_win') && !n.name.includes('_winfr') && n.position.z > 0) wins.push(n);
+  });
+  wins.sort((a,b)=>a.position.x-b.position.x);
+  wins.forEach((w, i)=>{
+    const mode = pattern[i % pattern.length];
+    if(mode === 'lit'){
+      w.material = winLitMat;
+      const d = glowDecal(2.6, 2.0, 0xff9d4e, 0.40);
+      d.position.set(w.position.x, w.position.y, w.position.z + 0.05); obj.add(d);
+    } else if(mode === 'dim'){
+      w.material = winDimMat;
+      const d = glowDecal(2.2, 1.7, 0xff8f3d, 0.25);
+      d.position.set(w.position.x, w.position.y, w.position.z + 0.05); obj.add(d);
+    }
+    // 'dark': left alone — a couple of dark bays is fine
+  });
+  // broad warm wash across the road-facing facade (faked sign/lamp spill)
+  const fz = wins.length ? wins[0].position.z : 7.5;
+  const wash = glowDecal(11, 6, 0xff8f3d, 0.16);
+  wash.position.set(0, 3.4, fz + 0.03); obj.add(wash);
+  if(doorMode){
+    let door = null;
+    obj.traverse(n=>{
+      if(!door && n.isMesh && n.name.includes('_door') && !n.name.includes('doorfr') && !n.name.includes('doorsl') && n.position.z > 0) door = n;
+    });
+    if(door){
+      const open = doorMode === 'open';
+      door.material = open ? doorGlowMat : winDimMat; // lit doorway reads as open/working
+      const glow = glowDecal(4.4, 4.6, 0xff9d4e, open ? 0.50 : 0.30);
+      glow.position.set(door.position.x, door.position.y, door.position.z + 0.06); obj.add(glow);
+      const spill = new THREE.PointLight(0xffa54e, 0, 11, 1.8);
+      spill.userData.night = open ? 7 : 3;
+      spill.position.set(door.position.x, 2.4, door.position.z + 1.4);
+      obj.add(spill); interiorLights.push(spill);
+    }
+  }
+}
+// boat cabins: lit windows + a warm deck lamp; some boats stay dark for variation
+function lightBoat(obj, lit){
+  obj.traverse(n=>{
+    if(n.isMesh && n.material && n.material.name && n.material.name.includes('boat_glass'))
+      n.material = lit ? boatGlassLitMat : boatGlassDarkMat;
+  });
+  if(lit){
+    const p = new THREE.PointLight(0xffb45e, 0, 10, 1.8);
+    p.userData.night = 5;
+    p.position.set(0, 2.2, -0.6); obj.add(p); interiorLights.push(p);
+  }
+}
+
+// sky dome + moon + far-shore town
+const skyMat = new THREE.MeshBasicMaterial({ map: skyTexture(true), side: THREE.BackSide, fog:false, depthWrite:false });
+const skyDome = new THREE.Mesh(new THREE.SphereGeometry(340, 32, 20), skyMat);
+skyDome.position.set(0, 0, -60); scene.add(skyDome);
+const daySkyTex = skyTexture(false), nightSkyTex = skyMat.map;
+const moonDisc = new THREE.Mesh(new THREE.CircleGeometry(9, 32),
+  new THREE.MeshBasicMaterial({ color: 0xf2f6ff, fog:false }));
+moonDisc.position.set(150, 105, -120); moonDisc.lookAt(0, 10, -30); scene.add(moonDisc);
+const moonHalo = new THREE.Mesh(new THREE.CircleGeometry(16, 32),
+  new THREE.MeshBasicMaterial({ color: 0x8fa8d8, transparent:true, opacity: 0.25,
+    blending: THREE.AdditiveBlending, fog:false, depthWrite:false }));
+moonHalo.position.copy(moonDisc.position); moonHalo.lookAt(0, 10, -30); scene.add(moonHalo);
+const townMat = new THREE.MeshBasicMaterial({ map: townSkylineTexture(), transparent:true, fog:false, depthWrite:false });
+const town = new THREE.Mesh(new THREE.PlaneGeometry(340, 62), townMat);
+town.position.set(150, 20, -45); town.rotation.y = -Math.PI/2; scene.add(town);
+
+function setNight(on){
+  document.getElementById('btn-night').classList.toggle('on', on);
+  document.getElementById('btn-day').classList.toggle('on', !on);
+  if (on){
+    scene.background.set(0x0a1220); scene.fog.color.set(0x0a1220);
+    hemi.intensity=0.95; hemi.color.set(0x33456e); hemi.groundColor.set(0x141a28);
+    ambientNight.intensity=0.55;
+    moon.intensity=0.5; sun.intensity=0.0;
+    lampLights.forEach(p=>p.intensity=34); boatLights.forEach(p=>p.intensity=12);
+    blueFill.intensity=10;
+    interiorLights.forEach(p=>{ p.intensity = p.userData.night || 0; });
+    spillDecals.forEach(d=>{ d.visible = true; });
+    winLitMat.emissiveIntensity=1.9; winDimMat.emissiveIntensity=0.85;
+    doorGlowMat.emissiveIntensity=2.2; boatGlassLitMat.emissiveIntensity=1.7;
+    lampHeadMats.forEach(m=>{ m.emissive.set(0xffa63d); m.emissiveIntensity=2.6; });
+    renderer.toneMappingExposure=1.25;
+    skyMat.map = nightSkyTex;
+    moonDisc.visible = moonHalo.visible = town.visible = true;
+  } else {
+    scene.background.set(0x9fc3e8); scene.fog.color.set(0x9fc3e8);
+    hemi.intensity=1.15; hemi.color.set(0xbfd9ff); hemi.groundColor.set(0x6a7078);
+    ambientNight.intensity=0;
+    moon.intensity=0.0; sun.intensity=2.8;
+    lampLights.forEach(p=>p.intensity=0); boatLights.forEach(p=>p.intensity=0);
+    blueFill.intensity=0;
+    interiorLights.forEach(p=>{ p.intensity = 0; });
+    spillDecals.forEach(d=>{ d.visible = false; });
+    winLitMat.emissiveIntensity=0; winDimMat.emissiveIntensity=0;
+    doorGlowMat.emissiveIntensity=0; boatGlassLitMat.emissiveIntensity=0;
+    lampHeadMats.forEach(m=>{ m.emissiveIntensity=0.0; });
+    renderer.toneMappingExposure=1.0;
+    skyMat.map = daySkyTex;
+    moonDisc.visible = moonHalo.visible = town.visible = false;
+  }
+  skyMat.needsUpdate = true;
+  window.__hw.night = on;
+}
+document.getElementById('btn-day').onclick = ()=>setNight(false);
+document.getElementById('btn-night').onclick = ()=>setNight(true);
+
+// --- inline orbit ---
+const orbit = { theta:0.12, phi:1.25, radius:38, target:new THREE.Vector3(2,3,-28), auto:false };
+let dragging=false, px=0, py=0;
+canvas.addEventListener('pointerdown', e=>{ dragging=true; px=e.clientX; py=e.clientY; orbit.auto=false; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', e=>{
+  if(!dragging) return;
+  orbit.theta -= (e.clientX-px)*0.007;
+  orbit.phi = THREE.MathUtils.clamp(orbit.phi-(e.clientY-py)*0.007, 0.12, Math.PI-0.08);
+  px=e.clientX; py=e.clientY;
+});
+canvas.addEventListener('pointerup', ()=>{ dragging=false; });
+canvas.addEventListener('pointercancel', ()=>{ dragging=false; });
+canvas.addEventListener('wheel', e=>{
+  e.preventDefault();
+  orbit.radius = THREE.MathUtils.clamp(orbit.radius*(1+Math.sign(e.deltaY)*0.1), 4, 180);
+  orbit.auto=false;
+}, { passive:false });
+
+function streetView(){
+  orbit.target.set(2, 2.4, -28);
+  orbit.theta = 0.12; orbit.phi = 1.44; orbit.radius = 24; orbit.auto=false;
+}
+function setView(theta, phi, radius, tx, ty, tz){
+  orbit.theta=theta; orbit.phi=phi; orbit.radius=radius;
+  orbit.target.set(tx,ty,tz); orbit.auto=false;
+}
+document.getElementById('btn-cam').onclick = streetView;
+
+function sizeRenderer(){
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
+  renderer.setSize(w, h, false);
+  camera.aspect = w/h; camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', sizeRenderer);
+
+// --- scene assembly ---
+const loader = new GLTFLoader();
+const cache = new Map();
+function loadGLB(file){
+  if (cache.has(file)) return cache.get(file);
+  const p = new Promise((res, rej)=>loader.load(MDIR+file, gltf=>res(gltf), undefined, rej));
+  cache.set(file, p); return p;
+}
+async function place(file, x, y, z, rotY=0){
+  const gltf = await loadGLB(file);
+  const o = gltf.scene.clone(true);
+  o.position.set(x, y, z); o.rotation.y = rotY;
+  o.traverse(n=>{ if(n.isMesh){ n.castShadow=true; n.receiveShadow=true; } });
+  scene.add(o); return o;
+}
+
+// real-Japanese sign boards; every board is bolted onto a warehouse facade.
+// entries may reuse a sign GLB file with a different painted word (meshKey picks the board mesh).
+const SIGNS = {
+  soko:   { file:'bt-hw-sign-soko.glb',   bg:'#16265e', fg:'#f2ecdc', text:'倉庫',   horizontal:true,  mesh:'soko'   },
+  minato: { file:'bt-hw-sign-minato.glb',  bg:'#14264e', fg:'#f2ecdc', text:'港',     horizontal:false, mesh:'minato' },
+  ichiba: { file:'bt-hw-sign-soko.glb',   bg:'#1c2a52', fg:'#f2ecdc', text:'魚市場', horizontal:true,  mesh:'soko'   },
+  gyoko:  { file:'bt-hw-sign-minato.glb',  bg:'#14264e', fg:'#f2ecdc', text:'漁港',   horizontal:false, mesh:'minato' },
+};
+function applySignTexture(obj, key){
+  const s = SIGNS[key];
+  const tex = signTexture(s.text, s.bg, s.fg, s.horizontal, 200+key.length*11+[...key].reduce((a,c)=>a+c.charCodeAt(0),0));
+  obj.traverse(n=>{
+    if(!n.isMesh || !n.name.includes('board_'+s.mesh)) return;
+    n.geometry.computeBoundingBox();
+    const bb = n.geometry.boundingBox;
+    const g = new THREE.BoxGeometry(
+      Math.max(0.01, bb.max.x-bb.min.x),
+      Math.max(0.01, bb.max.y-bb.min.y),
+      Math.max(0.01, bb.max.z-bb.min.z));
+    const cx=(bb.max.x+bb.min.x)/2, cy=(bb.max.y+bb.min.y)/2, cz=(bb.max.z+bb.min.z)/2;
+    g.translate(cx, cy, cz);
+    n.geometry = g;
+    n.material = new THREE.MeshStandardMaterial({
+      map: tex, emissive: 0xffffff, emissiveMap: tex,
+      emissiveIntensity: 1.15, roughness: 0.55, metalness: 0.0 });
+  });
+}
+
+const streakTex = streakTexture();
+const WATER_Y = -1.26;
+function waterReflection(x, z, tint, len=11, w=2.4, opacity=0.5){
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, len),
+    new THREE.MeshBasicMaterial({ map: streakTex, color: tint, transparent:true,
+      opacity, blending: THREE.AdditiveBlending, depthWrite:false }));
+  m.rotation.x = -Math.PI/2; m.position.set(x, WATER_Y+0.04, z); scene.add(m);
+}
+
+// coiled mooring rope: grounded stack of tori on the quay deck
+const ropeMat = new THREE.MeshStandardMaterial({ color:0x8a6f4d, roughness:1.0, metalness:0.0 });
+const deckMat = new THREE.MeshStandardMaterial({ color:0x2a2d33, roughness:0.95, metalness:0.0 });
+function ropeCoil(x, z, deckY){
+  const g = new THREE.Group();
+  for(let i=0;i<3;i++){
+    const t = new THREE.Mesh(new THREE.TorusGeometry(0.30-0.03*i, 0.085, 10, 22), ropeMat);
+    t.rotation.x = Math.PI/2;
+    t.position.set(x, deckY+0.09+i*0.15, z);
+    t.castShadow = t.receiveShadow = true;
+    g.add(t);
+  }
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.44, 0.05, 20), deckMat);
+  base.position.set(x, deckY+0.025, z); base.receiveShadow = true; g.add(base);
+  scene.add(g); return g;
+}
+
+// mooring line: catenary tube from quay bollard to boat gunwale (both real endpoints)
+const lineMat = new THREE.MeshBasicMaterial({ color:0x14100b });
+function mooringLine(ax,ay,az, bx,by,bz, sag=0.35){
+  const a = new THREE.Vector3(ax,ay,az), b = new THREE.Vector3(bx,by,bz);
+  const mid = new THREE.Vector3().addVectors(a,b).multiplyScalar(0.5); mid.y -= sag;
+  const curve = new THREE.QuadraticBezierCurve3(a, mid, b);
+  const mesh = new THREE.Mesh(new THREE.TubeGeometry(curve, 18, 0.03, 6), lineMat);
+  scene.add(mesh); return mesh;
+}
+
+// shared emissive materials, collected during build
+const lampHeadMats = [];
+const navGlowMat = new THREE.MeshBasicMaterial({ color:0xffd9a0, transparent:true, opacity:0.9,
+  blending:THREE.AdditiveBlending, depthWrite:false, fog:false });
+
+// light the boat's OWN masthead navlight node (physically on the mast) + its glow
+function boatNavLight(boat){
+  boat.traverse(n=>{
+    if(n.isMesh && n.name === 'bt-hw-boat_navlight'){
+      n.material = new THREE.MeshStandardMaterial({ color:0x201408,
+        emissive:0xffc37a, emissiveIntensity:3.4, roughness:0.5 });
+      const glow = new THREE.Mesh(new THREE.SphereGeometry(0.20, 12, 10), navGlowMat);
+      n.add(glow); // rides exactly on the masthead fixture, never floating
+    }
+  });
+}
+
+const rnd = mulberry32(20260919);
+async function build(){
+  const jobs = [];
+  const DECK = 0.2; // quay/apron deck top
+
+  const ground = await place('bt-hw-ground.glb', 0, 0, -30);
+  ground.traverse(n=>{ // dark canal water: deep blue + lamp-catching sheen
+    if(n.isMesh && n.material && n.material.name === 'bt-hw-ground_water'){
+      n.material.color.set(0x0e233f); n.material.roughness = 0.30; n.material.metalness = 0.15;
+    }
+  });
+  jobs.push(Promise.resolve(ground));
+  jobs.push(place('bt-hw-markings.glb', 0, 0, -30));
+
+  // --- wooden warehouses, west side, facades facing the road/canal (+X) ---
+  // interior pass: warm lit windows + lit doorways so the port reads as working
+  jobs.push(place('bt-hw-wh-a.glb', -15, 0, -8,  Math.PI/2).then(o=>{ lightWarehouse(o, ['lit','dim','lit'], 'open'); return o; }));
+  jobs.push(place('bt-hw-wh-b.glb', -16, 0, -28, Math.PI/2).then(o=>{ lightWarehouse(o, ['lit','dark','lit'], 'open'); return o; }));
+  jobs.push(place('bt-hw-wh-c.glb', -16, 0, -50, Math.PI/2).then(o=>{ lightWarehouse(o, ['dark','lit','dark'], 'dim'); return o; }));
+
+  // --- real-Japanese boards, bolted to facades (arms reach into the wall) ---
+  jobs.push(place(SIGNS.soko.file,   -7.4, 3.4, -8,  0).then(o=>{ applySignTexture(o,'soko');   return o; })); // 倉庫
+  jobs.push(place(SIGNS.minato.file, -7.2, 5.2, -26, 0).then(o=>{ applySignTexture(o,'minato'); return o; })); // 港 (tate-kanban)
+  jobs.push(place(SIGNS.ichiba.file, -6.2, 3.6, -50, 0).then(o=>{ applySignTexture(o,'ichiba'); return o; })); // 魚市場 (wh-c facade is wider)
+  jobs.push(place(SIGNS.gyoko.file,  -7.2, 4.6, -38, 0).then(o=>{ applySignTexture(o,'gyoko');  return o; })); // 漁港 (tate-kanban)
+
+  // --- sodium quay lamps + their amber streaks on the canal water ---
+  for (const [x,z] of lampPos){
+    jobs.push(place('bt-hw-lamp.glb', x, DECK, z).then(o=>{
+      o.traverse(n=>{
+        if(n.isMesh && n.material && n.material.name === 'bt-hw-lamp_flood'
+           && !lampHeadMats.includes(n.material)) lampHeadMats.push(n.material);
+      });
+      return o;
+    }));
+    waterReflection(11.6, z, 0xffa63d, 13, 2.6, 0.7);
+  }
+  // moon streak on the water
+  waterReflection(30, -34, 0xaac4ff, 26, 3.4, 0.35);
+
+  // --- mooring bollards + coiled ropes + tire fenders + life rings ---
+  const bollardZ = [-8,-20,-32,-44,-56];
+  for (const z of bollardZ){
+    jobs.push(place('bt-hw-bollard.glb', 9.9, DECK, z));
+  }
+  ropeCoil(9.0, -14, DECK); ropeCoil(9.0, -26, DECK);
+  ropeCoil(9.0, -38, DECK); ropeCoil(9.0, -50, DECK);
+  for (const z of [-20,-30,-40])
+    jobs.push(place('bt-hw-tire.glb', 10.05, -0.5, z, Math.PI/2));
+  jobs.push(place('bt-hw-lifering.glb', 9.6, DECK, -16));
+  jobs.push(place('bt-hw-lifering.glb', 9.6, DECK, -44));
+
+  // --- fishing fleet: near-quay row + rafted outboard boats, lamps lit ---
+  const fleet = [
+    { x:13.5, z:-14, r: 0.06 }, { x:13.5, z:-28, r:-0.08 },
+    { x:13.5, z:-42, r: 0.10 }, { x:13.5, z:-56, r:-0.05 },
+    { x:16.6, z:-21, r: 0.12 }, { x:16.6, z:-49, r:-0.10 }, // rafted outboard
+  ];
+  const cabinLit = [true, true, true, false, true, false]; // most boats working, two dark for variation
+  const boatJobs = [];
+  for (let bi=0; bi<fleet.length; bi++){
+    const b = fleet[bi];
+    boatJobs.push(place('bt-hw-boat.glb', b.x, WATER_Y, b.z, b.r).then(o=>{
+      boatNavLight(o);
+      lightBoat(o, cabinLit[bi]);
+      waterReflection(b.x, b.z-1, 0xffc37a, 6, 1.4, 0.6);
+      return o;
+    }));
+  }
+  // mooring lines: quay bollards -> boat gunwale cleats (real endpoints both sides)
+  const lineSpans = [
+    [9.9,-8,  12.6,-11], [9.9,-20, 12.6,-17], [9.9,-20, 12.6,-23],
+    [9.9,-32, 12.6,-29], [9.9,-32, 12.6,-35], [9.9,-44, 12.6,-41],
+    [9.9,-44, 12.6,-47], [9.9,-56, 12.6,-53], [9.9,-56, 12.6,-59],
+  ];
+  for (const [ax,az,bx,bz] of lineSpans)
+    mooringLine(ax, DECK+0.75, az, bx, WATER_Y+0.6, bz, 0.5);
+  for (const bj of boatJobs) jobs.push(bj);
+
+  // --- working-gear props: crates, pallets, barrels (fish-market clutter) ---
+  jobs.push(place('bt-hw-crate.glb', -9.5, 0.12, -18));
+  jobs.push(place('bt-hw-crate.glb', -9.5, 1.32, -18, 0.2));
+  jobs.push(place('bt-hw-crate.glb', -9.5, 0.12, -34));
+  jobs.push(place('bt-hw-crate.glb', 7.2, DECK, -12));
+  jobs.push(place('bt-hw-pallet.glb', -9.5, 0.12, -26));
+  jobs.push(place('bt-hw-pallet.glb', 7.0, DECK, -22));
+  jobs.push(place('bt-hw-pallet.glb', 7.2, DECK, -36));
+  jobs.push(place('bt-hw-barrel.glb', -10.5, 0.12, -12));
+  jobs.push(place('bt-hw-barrel.glb', -10.0, 0.12, -12.9));
+  jobs.push(place('bt-hw-barrel.glb', -10.6, 0.12, -13.8));
+  jobs.push(place('bt-hw-barrel.glb', 7.4, DECK, -46));
+
+  // --- forklift + crew on the apron ---
+  jobs.push(place('bt-hw-forklift.glb', -6.5, 0.1, -20, 0.61));
+  jobs.push(place('bt-hw-worker.glb', -7.5, 0.12, -19, 2.4));
+  jobs.push(place('bt-hw-worker.glb', 7.0, DECK, -33, -0.9));
+
+  let done = 0; const total = jobs.length;
+  for (const j of jobs){ await j; done++; statusEl.textContent = `loading ${done}/${total}`; }
+  statusEl.dataset.total = total;
+}
+
+function loop(){
+  requestAnimationFrame(loop);
+  if (orbit.auto) orbit.theta += 0.003;
+  const sp = Math.sin(orbit.phi);
+  camera.position.set(
+    orbit.target.x + orbit.radius*sp*Math.sin(orbit.theta),
+    orbit.target.y + orbit.radius*Math.cos(orbit.phi),
+    orbit.target.z + orbit.radius*sp*Math.cos(orbit.theta));
+  camera.lookAt(orbit.target);
+  renderer.render(scene, camera);
+}
+
+window.__hw = { night:true, ready:false, setNight, streetView, setView, scene, camera, THREE,
+  state:()=>({ ready:window.__hw.ready, night:window.__hw.night,
+    objects: scene.children.length,
+    cam: camera.position.toArray().map(v=>+v.toFixed(2)) }) };
+
+sizeRenderer();
+setNight(true);
+streetView();
+build().then(()=>{
+  window.__hw.ready = true;
+  setNight(window.__hw.night); // re-apply: lamp-head emissives were collected during build
+  const total = document.getElementById('status').dataset.total || '?';
+  statusEl.textContent = `ready — ${total} assets · static diorama`;
+}).catch(err=>{
+  statusEl.textContent = 'LOAD ERROR: ' + (err.message||err);
+  window.__hw.error = String(err);
+});
+loop();
+</script>
+</body>
+</html>
